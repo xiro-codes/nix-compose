@@ -174,7 +174,7 @@ in
                   echo "Usage: nxc ssh <node-name>"
                   exit 1
                 fi
-                PORT=$(nix eval --json "${flakeUrl}#compositions.''${system}.default.connectInfo.''${NODE}.sshPort")
+                PORT=$(nix eval --json "${flakeUrl}#compositions.${system}.default.connectInfo.''${NODE}.sshPort")
                 echo "Connecting to ''${NODE} on port ''${PORT}..."
                 exec ssh -p "''${PORT}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vmuser@localhost
                 ;;

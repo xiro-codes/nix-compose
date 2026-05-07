@@ -29,7 +29,7 @@ Add `nix-compose` to your `flake.nix` inputs:
 
 ```nix
 {
-  inputs.nix-compose.url = "github:tod/nix-compose";
+  inputs.nix-compose.url = "github:xiro-codes/nix-compose";
 
   outputs = { self, nixpkgs, nix-compose, ... }: {
     compositions.x86_64-linux.default = nix-compose.lib.mkComposition {

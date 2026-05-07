@@ -4,9 +4,7 @@
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
-    # In a real setup, this would be:
-    # nix-compose.url = "github:username/nix-compose";
-    nix-compose.url = "path:../../..";
+    nix-compose.url = "github:xiro-codes/nix-compose";
   };
 
   outputs =
@@ -68,7 +66,8 @@
           # Export individual VM packages for building
           packages = {
             default = composition.driver;
-          } // composition.nodes;
+          }
+          // composition.nodes;
 
           devShells.default = pkgs.mkShellNoCC {
             packages = [ pkgs.just ];
