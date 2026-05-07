@@ -105,13 +105,16 @@ in
         lib.imap0 (i: n: lib.nameValuePair n "10.233.1.${toString (i + 1)}") (lib.attrNames nodes)
       );
 
+      # Helper to evaluate NixOS configurations
+      nixosSystem = import (pkgs.path + "/nixos/lib/eval-config.nix");
+
       # Evaluate each node as a proper NixOS system
       evaluatedNodes = lib.mapAttrs (
         nodeName: nodeConf:
         let
           _ = validateNames.${nodeName};
         in
-        lib.nixosSystem {
+        nixosSystem {
           inherit (pkgs) system;
           modules = [
             nodeConf
