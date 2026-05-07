@@ -53,7 +53,8 @@ Add `nix-compose` to your `flake.nix` inputs:
 
 Once set up, you can interact with your cluster using the following commands:
 
-- `nix run . up` - Start the cluster in interactive mode.
+- `nix run . up` - Start the cluster (non-interactive by default).
+- `nix run . up --interactive` - Start the cluster with the Python REPL.
 - `nix run . ssh <node>` - SSH into a specific node.
 - `nix run . status` - Check if the VMs are running.
 - `nix run . list` - List all configured nodes.

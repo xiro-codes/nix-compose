@@ -75,7 +75,8 @@
               echo "Nix-Compose Template Shell"
               echo "--------------------------"
               echo "Available commands:"
-              echo "  nix run . up          - Start the cluster"
+              echo "  nix run . up          - Start the cluster (non-interactive)"
+              echo "  nix run . up -i       - Start the cluster with interactive REPL"
               echo "  nix run . ssh server  - SSH into 'server'"
               echo "  just build            - Build all VMs"
             '';

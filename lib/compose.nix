@@ -160,8 +160,26 @@ in
 
             case "$COMMAND" in
               up)
-                echo "Starting development VMs..."
-                "${composition.driver}/bin/nixos-test-driver" --interactive
+                INTERACTIVE=false
+                # Simple argument parsing
+                for arg in "$@"; do
+                  if [ "$arg" == "--interactive" ] || [ "$arg" == "-i" ]; then
+                    INTERACTIVE=true
+                    break
+                  fi
+                done
+
+                if [ "$INTERACTIVE" = "true" ]; then
+                  echo "Starting development VMs in interactive mode..."
+                  "${composition.driver}/bin/nixos-test-driver" --interactive
+                else
+                  echo "Starting development VMs (non-interactive)..."
+                  echo "Tip: Run 'nxc up --interactive' (or -i) to start with the Python REPL."
+                  # We use interactive mode but pipe a script that starts the VMs and then waits.
+                  # This keeps the driver alive without presenting a functional REPL.
+                  # We use signal.pause() to wait for Ctrl-C.
+                  echo "start_all(); import signal; signal.pause()" | "${composition.driver}/bin/nixos-test-driver" --interactive | grep -v ">>>"
+                fi
                 ;;
               down)
                 echo "Stopping running VMs..."
