@@ -22,6 +22,7 @@ let
       name,
       nodes,
       sshPort,
+      internalIps,
     }:
     { config, pkgs, ... }:
     let
@@ -63,9 +64,9 @@ let
         chown vmuser:users /home/vmuser/.ssh/id_ed25519.pub
       '';
 
-      # Explicitly ensure all nodes are in /etc/hosts
-      networking.hosts = lib.listToAttrs (
-        lib.imap0 (i: n: lib.nameValuePair "10.233.1.${toString (i + 1)}" [ n ]) (lib.attrNames nodes)
+      # Inject cluster hosts via NixOS configuration
+      networking.extraHosts = lib.concatStringsSep "\n" (
+        lib.mapAttrsToList (n: ip: "${ip} ${n}") internalIps
       );
     };
 in
@@ -81,11 +82,28 @@ in
     let
       inherit (pkgs) lib;
 
+      # Enforce name limits for nixos-container (interface names are limited to 15 chars, so 've-' + name <= 15)
+      maxLen = 12;
+      validateNames = lib.mapAttrs (nodeName: _:
+        let
+          fullPath = "${name}-${nodeName}";
+        in
+        if lib.stringLength fullPath > maxLen then
+          throw "Container name '${fullPath}' is too long (${toString (lib.stringLength fullPath)} chars). NixOS container names (including the composition name) must be <= ${toString maxLen} characters to satisfy network interface limits."
+        else
+          null
+      ) nodes;
+
       # Assign an SSH port to each node starting from 2222
       nodesWithPorts = lib.imap0 (i: name: {
         inherit name;
         sshPort = 2222 + i;
       }) (lib.attrNames nodes);
+
+      # Internal IP mapping (using 10.233.1.x subnet)
+      internalIps = lib.listToAttrs (
+        lib.imap0 (i: n: lib.nameValuePair n "10.233.1.${toString (i + 1)}") (lib.attrNames nodes)
+      );
 
       # Wrap each node with our dev module
       enrichedNodes = lib.listToAttrs (
@@ -97,7 +115,12 @@ in
               imports = [
                 nodes.${name}
                 (mkDevModule {
-                  inherit name nodes sshPort;
+                  inherit
+                    name
+                    nodes
+                    sshPort
+                    internalIps
+                    ;
                 })
               ];
             }
@@ -123,10 +146,7 @@ in
         map ({ name, sshPort }: lib.nameValuePair name { inherit sshPort; }) nodesWithPorts
       );
 
-      # Internal IP mapping for the CLI (using 10.233.1.x subnet often used for containers)
-      internalIps = lib.listToAttrs (
-        lib.imap0 (i: n: lib.nameValuePair n "10.233.1.${toString (i + 1)}") (lib.attrNames nodes)
-      );
+      inherit internalIps;
     };
 
   # Helper to create a unified CLI app for a composition
@@ -169,12 +189,14 @@ in
                 echo "Starting NixOS containers for cluster: $CLUSTER_NAME"
                 echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
                   CONTAINER_NAME="$CLUSTER_NAME-$NODE"
-                  echo "  - Starting $NODE ($CONTAINER_NAME)..."
+                  IP=$(echo "$INTERNAL_IPS" | jq -r ".\"$NODE\"")
+                  echo "  - Starting $NODE ($CONTAINER_NAME) at $IP..."
                   
                   if sudo nixos-container list | grep -q "^$CONTAINER_NAME$"; then
                     sudo nixos-container update "$CONTAINER_NAME" --system "$TOPLEVEL"
                   else
-                    sudo nixos-container create "$CONTAINER_NAME" --system "$TOPLEVEL"
+                    # We pass the local address so it matches our generated /etc/hosts
+                    sudo nixos-container create "$CONTAINER_NAME" --system "$TOPLEVEL" --local-address "$IP"
                   fi
                   sudo nixos-container start "$CONTAINER_NAME"
                 done
@@ -222,6 +244,10 @@ in
                 fi
                 echo "$IP"
                 ;;
+              hosts)
+                echo "# Nix-Compose Hosts for $CLUSTER_NAME"
+                echo "$INTERNAL_IPS" | jq -r 'to_entries[] | "\(.value) \(.key)"'
+                ;;
               status)
                 echo "Cluster Status ($CLUSTER_NAME):"
                 sudo nixos-container list | grep "$CLUSTER_NAME-" || echo "No containers running for this cluster."
@@ -236,6 +262,7 @@ in
                 echo "  status                   Show the status of running containers"
                 echo "  list                     List all configured nodes"
                 echo "  ip <node>                Print the internal ip address of a node"
+                echo "  hosts                    Print the /etc/hosts content for the cluster"
                 ;;
               *)
                 echo "Unknown command: $COMMAND"

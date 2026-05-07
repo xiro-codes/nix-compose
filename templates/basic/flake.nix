@@ -34,9 +34,9 @@
           # Define your cluster nodes here
           composition = nix-compose.lib.mkComposition {
             inherit pkgs;
-            name = "cluster";
+            name = "cl";
             nodes = {
-              server =
+              srv =
                 { ... }:
                 {
                   services.nginx = {
@@ -48,7 +48,7 @@
                   };
                   networking.firewall.allowedTCPPorts = [ 80 ];
                 };
-              client =
+              clt =
                 { pkgs, ... }:
                 {
                   environment.systemPackages = [ pkgs.curl ];
@@ -77,7 +77,7 @@
               echo "Available commands:"
               echo "  nix run . up          - Start the containers (requires sudo)"
               echo "  nix run . down        - Stop and destroy containers"
-              echo "  nix run . ssh server  - Enter the 'server' container"
+              echo "  nix run . ssh srv     - Enter the 'srv' container"
               echo "  nix run . status      - Show cluster status"
               echo "  just build            - Build all container toplevels"
             '';
