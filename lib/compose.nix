@@ -143,6 +143,8 @@ in
     }:
     let
       inherit (pkgs) lib;
+      connectInfoJSON = builtins.toJSON composition.connectInfo;
+      internalIpsJSON = builtins.toJSON composition.internalIps;
     in
     {
       type = "app";
@@ -157,6 +159,9 @@ in
           text = ''
             COMMAND="''${1:-help}"
             [ "$#" -gt 0 ] && shift
+
+            CONNECT_INFO='${connectInfoJSON}'
+            INTERNAL_IPS='${internalIpsJSON}'
 
             case "$COMMAND" in
               up)
@@ -173,17 +178,18 @@ in
                   echo "Starting development VMs in interactive mode..."
                   "${composition.driver}/bin/nixos-test-driver" --interactive
                 else
-                  echo "Starting development VMs (non-interactive)..."
+                  echo "Starting development VMs in background..."
                   echo "Tip: Run 'nxc up --interactive' (or -i) to start with the Python REPL."
-                  # We use interactive mode but pipe a script that starts the VMs and then waits.
-                  # This keeps the driver alive without presenting a functional REPL.
-                  # We use signal.pause() to wait for Ctrl-C.
-                  echo "start_all(); import signal; signal.pause()" | "${composition.driver}/bin/nixos-test-driver" --interactive | grep -v ">>>"
+                  # Run in background and redirect all output to /dev/null
+                  (echo "start_all(); import signal; signal.pause()" | "${composition.driver}/bin/nixos-test-driver" --interactive > /dev/null 2>&1) &
+                  echo "Cluster is starting. Use 'nxc status' to monitor."
                 fi
                 ;;
               down)
                 echo "Stopping running VMs..."
-                # We use the composition name to find the right processes
+                # Kill both the driver and the qemu processes
+                # We use || true to avoid error messages if processes are already gone
+                pkill -f "nixos-test-driver.*${composition.test.name}" || true
                 pkill -f "qemu-system.*-name ${composition.test.name}" || echo "No VMs running."
                 ;;
               ssh)
@@ -192,13 +198,17 @@ in
                   echo "Usage: nxc ssh <node-name>"
                   exit 1
                 fi
-                PORT=$(nix eval --json "${flakeUrl}#compositions.${system}.default.connectInfo.''${NODE}.sshPort")
+                PORT=$(echo "$CONNECT_INFO" | jq -r ".''${NODE}.sshPort // empty")
+                if [ -z "$PORT" ]; then
+                  echo "Error: Unknown node ''${NODE}"
+                  exit 1
+                fi
                 echo "Connecting to ''${NODE} on port ''${PORT}..."
                 exec ssh -p "''${PORT}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vmuser@localhost
                 ;;
               list)
                 echo "Configured VMs:"
-                nix eval --json "${flakeUrl}#compositions.${system}.default.connectInfo" | jq -r 'keys[]' | sed 's/^/- /'
+                echo "$CONNECT_INFO" | jq -r 'keys[]' | sed 's/^/- /'
                 ;;
               ip)
                 NODE="''${1:-}"
@@ -206,8 +216,12 @@ in
                   echo "Usage: nxc ip <node-name>"
                   exit 1
                 fi
-                nix eval --raw "${flakeUrl}#compositions.${system}.default.internalIps.''${NODE}"
-                echo ""
+                IP=$(echo "$INTERNAL_IPS" | jq -r ".''${NODE} // empty")
+                if [ -z "$IP" ]; then
+                  echo "Error: Unknown node ''${NODE}"
+                  exit 1
+                fi
+                echo "$IP"
                 ;;
               status)
                 echo "Cluster Status:"
