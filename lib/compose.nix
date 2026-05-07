@@ -180,7 +180,7 @@ in
                 ;;
               list)
                 echo "Configured VMs:"
-                nix eval --json "${flakeUrl}#compositions.''${system}.default.connectInfo" | jq -r 'keys[]' | sed 's/^/- /'
+                nix eval --json "${flakeUrl}#compositions.${system}.default.connectInfo" | jq -r 'keys[]' | sed 's/^/- /'
                 ;;
               ip)
                 NODE="''${1:-}"
@@ -188,7 +188,7 @@ in
                   echo "Usage: nxc ip <node-name>"
                   exit 1
                 fi
-                nix eval --raw "${flakeUrl}#compositions.''${system}.default.internalIps.''${NODE}"
+                nix eval --raw "${flakeUrl}#compositions.${system}.default.internalIps.''${NODE}"
                 echo ""
                 ;;
               status)
