@@ -212,7 +212,7 @@ in
                   echo "Usage: nxc ssh <node-name>"
                   exit 1
                 fi
-                PORT=$(echo "$CONNECT_INFO" | jq -r ".''${NODE}.sshPort // empty")
+                PORT=$(echo "$CONNECT_INFO" | jq -r ".\"''${NODE}\".sshPort // empty")
                 if [ -z "$PORT" ]; then
                   echo "Error: Unknown node ''${NODE}"
                   exit 1
@@ -240,7 +240,7 @@ EOF
                   echo "Usage: nxc ip <node-name>"
                   exit 1
                 fi
-                IP=$(echo "$INTERNAL_IPS" | jq -r ".''${NODE} // empty")
+                IP=$(echo "$INTERNAL_IPS" | jq -r ".\"''${NODE}\" // empty")
                 if [ -z "$IP" ]; then
                   echo "Error: Unknown node ''${NODE}"
                   exit 1
