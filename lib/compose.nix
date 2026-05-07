@@ -168,7 +168,7 @@ in
               up)
                 echo "Starting NixOS containers for cluster: $CLUSTER_NAME"
                 echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
-                  CONTAINER_NAME="nxc-$CLUSTER_NAME-$NODE"
+                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
                   echo "  - Starting $NODE ($CONTAINER_NAME)..."
                   
                   if sudo nixos-container list | grep -q "^$CONTAINER_NAME$"; then
@@ -183,7 +183,7 @@ in
               down)
                 echo "Stopping and destroying NixOS containers..."
                 echo "$NODES" | jq -r 'keys[]' | while read -r NODE; do
-                  CONTAINER_NAME="nxc-$CLUSTER_NAME-$NODE"
+                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
                   echo "  - Stopping $CONTAINER_NAME..."
                   sudo nixos-container stop "$CONTAINER_NAME" || true
                   sudo nixos-container destroy "$CONTAINER_NAME" || true
@@ -224,7 +224,7 @@ in
                 ;;
               status)
                 echo "Cluster Status ($CLUSTER_NAME):"
-                sudo nixos-container list | grep "nxc-$CLUSTER_NAME-" || echo "No containers running for this cluster."
+                sudo nixos-container list | grep "$CLUSTER_NAME-" || echo "No containers running for this cluster."
                 ;;
               help|--help|-h)
                 echo "Usage: nxc [COMMAND]"
