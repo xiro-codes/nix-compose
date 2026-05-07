@@ -53,7 +53,7 @@ let
         mode = "0600";
         user = "vmuser";
       };
-
+      system.stateVersion = "26.05";
       # Fix permissions for the private key in the user's home
       system.activationScripts.vmuser-ssh-keys = ''
         mkdir -p /home/vmuser/.ssh
