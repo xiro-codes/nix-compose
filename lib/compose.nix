@@ -178,11 +178,25 @@ in
                   echo "Starting development VMs in interactive mode..."
                   "${composition.driver}/bin/nixos-test-driver" --interactive
                 else
-                  echo "Starting development VMs in background..."
+                  LOGS=$(mktemp)
+                  echo -n "Starting development VMs in background..."
+                  # We use interactive mode but pipe a script that starts the VMs, waits for SSH, and then pauses.
+                  # This keeps the driver alive without presenting a functional REPL.
+                  (echo "start_all(); [n.wait_for_unit('sshd') for n in nodes.values()]; print('READY'); import signal; signal.pause()" | "${composition.driver}/bin/nixos-test-driver" --interactive > "$LOGS" 2>&1) &
+                  
+                  until grep -q "READY" "$LOGS" 2>/dev/null; do
+                    echo -n "."
+                    sleep 1
+                    # Check if the process died early
+                    if ! pgrep -f "nixos-test-driver.*${composition.test.name}" > /dev/null; then
+                       echo " Failed!"
+                       cat "$LOGS"
+                       exit 1
+                    fi
+                  done
+                  echo " Done!"
                   echo "Tip: Run 'nxc up --interactive' (or -i) to start with the Python REPL."
-                  # Run in background and redirect all output to /dev/null
-                  (echo "start_all(); import signal; signal.pause()" | "${composition.driver}/bin/nixos-test-driver" --interactive > /dev/null 2>&1) &
-                  echo "Cluster is starting. Use 'nxc status' to monitor."
+                  echo "Cluster is running. Use 'nxc status' to monitor."
                 fi
                 ;;
               down)
@@ -203,8 +217,18 @@ in
                   echo "Error: Unknown node ''${NODE}"
                   exit 1
                 fi
+                
+                # Create temporary identity file
+                ID_FILE=$(mktemp)
+                chmod 600 "$ID_FILE"
+                cat <<EOF > "$ID_FILE"
+${devKeys.private}
+EOF
+                
                 echo "Connecting to ''${NODE} on port ''${PORT}..."
-                exec ssh -p "''${PORT}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vmuser@localhost
+                ssh -i "$ID_FILE" -p "''${PORT}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vmuser@localhost
+                
+                rm -f "$ID_FILE"
                 ;;
               list)
                 echo "Configured VMs:"
