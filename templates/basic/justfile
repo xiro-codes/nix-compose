@@ -24,10 +24,10 @@ list:
 ip node:
     nix run . ip -- {{node}}
 
-# Build all VM images
+# Build all container toplevels
 build:
-    @nodes=$$(nix eval --json .#compositions.$$(nix eval --raw --impure --expr "builtins.currentSystem").default.test.nodes | jq -r 'keys[]'); \
+    @nodes=$$(nix run . list | sed 's/- //'); \
     for node in $$nodes; do \
         echo "Building $$node..."; \
-        nix build .#$$node; \
+        nix build .#$$node --no-link; \
     done
