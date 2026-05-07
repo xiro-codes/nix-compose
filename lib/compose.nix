@@ -195,7 +195,7 @@ in
                   echo "Usage: nxc ssh <node-name>"
                   exit 1
                 fi
-                CONTAINER_NAME="nxc-$CLUSTER_NAME-$NODE"
+                CONTAINER_NAME="$CLUSTER_NAME-$NODE"
                 
                 if ! sudo nixos-container list | grep -q "^$CONTAINER_NAME$"; then
                   echo "Error: Container $CONTAINER_NAME is not running."

@@ -34,7 +34,7 @@
           # Define your cluster nodes here
           composition = nix-compose.lib.mkComposition {
             inherit pkgs;
-            name = "my-cluster";
+            name = "cluster";
             nodes = {
               server =
                 { ... }:
