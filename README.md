@@ -1,16 +1,16 @@
 # Pure Nix Compose
 
-A lightweight, multi-node NixOS VM orchestration library implemented in pure Nix. This project replicates the core features of `nixos-compose` (like inter-node networking, SSH key injection, and a unified CLI) using only built-in Nixpkgs infrastructure (`nixosTest`).
+A lightweight, multi-node NixOS container orchestration library implemented in pure Nix. This project replicates the core features of `nixos-compose` (like inter-node networking, SSH key injection, and a unified CLI) using only built-in Nixpkgs infrastructure and `nixos-container`.
 
 > [!CAUTION]
-> **Use at your own risk.** This library is currently in an experimental state. It involves complex QEMU orchestration and low-level NixOS configurations. Always back up your data before running local VM clusters.
+> **Use at your own risk.** This library is currently in an experimental state. It uses `systemd-nspawn` and `nixos-container` which require root privileges (`sudo`).
 
 ## Features
 
 - **Pure Nix**: No external binaries or heavy dependencies required—just Nix.
+- **Fast Startup**: Uses NixOS Containers (`nixos-container`) instead of QEMU VMs for near-instant boot times.
 - **Unified CLI**: Emulates the `nixos-compose` experience (`up`, `down`, `ssh`, `status`, etc.) via a Flake app.
-- **Automatic SSH**: Seamless node-to-node and host-to-node connectivity with pre-injected development keys.
-- **Flexible Networking**: Uses the standard NixOS test framework for robust inter-node communication.
+- **Automatic Networking**: Seamless node-to-node connectivity using internal container networks.
 
 ## Getting Started
 
@@ -20,7 +20,7 @@ The easiest way to start a new project is by using the provided template:
 
 ```bash
 mkdir my-cluster && cd my-cluster
-nix flake init -t github:tod/nix-compose
+nix flake init -t github:xiro-codes/nix-compose
 ```
 
 ### 2. Manual Integration
@@ -53,13 +53,12 @@ Add `nix-compose` to your `flake.nix` inputs:
 
 Once set up, you can interact with your cluster using the following commands:
 
-- `nix run . up` - Start the cluster (non-interactive by default).
-- `nix run . up --interactive` - Start the cluster with the Python REPL.
-- `nix run . ssh <node>` - SSH into a specific node.
-- `nix run . status` - Check if the VMs are running.
+- `nix run . up` - Start the containers (requires `sudo`).
+- `nix run . ssh <node>` - Enter a specific node's shell.
+- `nix run . status` - Check if the containers are running.
 - `nix run . list` - List all configured nodes.
-- `nix run . down` - Stop the running cluster.
+- `nix run . down` - Stop and destroy the containers.
 
 ## License
 
-MIT (See [LICENSE](LICENSE) if available)
+MIT

@@ -28,7 +28,10 @@ let
       inherit (pkgs) lib;
     in
     {
-      # Enable SSH for remote access
+      # Container specific settings
+      boot.isContainer = true;
+
+      # Enable SSH for remote access (optional but nice)
       services.openssh.enable = true;
       services.openssh.settings.PermitRootLogin = "yes";
 
@@ -47,7 +50,7 @@ let
       environment.etc."ssh/id_ed25519" = {
         text = devKeys.private;
         mode = "0600";
-        user = "vmuser"; # Note: environment.etc usually owned by root, we'll fix in postStart
+        user = "vmuser";
       };
 
       # Fix permissions for the private key in the user's home
@@ -60,20 +63,10 @@ let
         chown vmuser:users /home/vmuser/.ssh/id_ed25519.pub
       '';
 
-      # Forward SSH port to host
-      virtualisation.forwardPorts = [
-        {
-          from = "host";
-          host.port = sshPort;
-          guest.port = 22;
-        }
-      ];
-
       # Explicitly ensure all nodes are in /etc/hosts
       networking.hosts = lib.listToAttrs (
-        lib.imap0 (i: n: lib.nameValuePair "192.168.1.${toString (i + 1)}" [ n ]) (lib.attrNames nodes)
+        lib.imap0 (i: n: lib.nameValuePair "10.233.1.${toString (i + 1)}" [ n ]) (lib.attrNames nodes)
       );
-      # Note: 192.168.1.x is the default subnet for nixosTest vlan 1
     };
 in
 {
@@ -112,27 +105,27 @@ in
         ) nodesWithPorts
       );
 
-      # Create the NixOS test which acts as our orchestrator
+      # Create the NixOS test which acts as our evaluator
       test = pkgs.testers.nixosTest {
         inherit name testScript;
         nodes = enrichedNodes;
       };
     in
     {
-      inherit test;
+      inherit test name;
       driver = test.driver;
 
-      # Export individual VM runners
-      nodes = lib.mapAttrs (name: node: node.config.system.build.vm) test.nodes;
+      # Export individual container toplevels
+      nodes = lib.mapAttrs (name: node: node.config.system.build.toplevel) test.nodes;
 
       # A summary of how to connect
       connectInfo = lib.listToAttrs (
         map ({ name, sshPort }: lib.nameValuePair name { inherit sshPort; }) nodesWithPorts
       );
 
-      # Internal IP mapping for the CLI
+      # Internal IP mapping for the CLI (using 10.233.1.x subnet often used for containers)
       internalIps = lib.listToAttrs (
-        lib.imap0 (i: n: lib.nameValuePair n "192.168.1.${toString (i + 1)}") (lib.attrNames nodes)
+        lib.imap0 (i: n: lib.nameValuePair n "10.233.1.${toString (i + 1)}") (lib.attrNames nodes)
       );
     };
 
@@ -148,6 +141,8 @@ in
       inherit (pkgs) lib;
       connectInfoJSON = builtins.toJSON composition.connectInfo;
       internalIpsJSON = builtins.toJSON composition.internalIps;
+      nodesJSON = builtins.toJSON (lib.mapAttrs (n: v: "${v}") composition.nodes);
+      clusterName = composition.name;
     in
     {
       type = "app";
@@ -158,106 +153,96 @@ in
             pkgs.openssh
             pkgs.jq
             pkgs.procps
+            pkgs.nixos-container
           ];
           text = ''
-                        COMMAND="''${1:-help}"
-                        [ "$#" -gt 0 ] && shift
+            COMMAND="''${1:-help}"
+            [ "$#" -gt 0 ] && shift
 
-                        CONNECT_INFO='${connectInfoJSON}'
-                        INTERNAL_IPS='${internalIpsJSON}'
+            CONNECT_INFO='${connectInfoJSON}'
+            INTERNAL_IPS='${internalIpsJSON}'
+            NODES='${nodesJSON}'
+            CLUSTER_NAME="${clusterName}"
 
-                        case "$COMMAND" in
-                          up)
-                            INTERACTIVE=false
-                            # Simple argument parsing
-                            for arg in "$@"; do
-                              if [ "$arg" == "--interactive" ] || [ "$arg" == "-i" ]; then
-                                INTERACTIVE=true
-                                break
-                              fi
-                            done
+            case "$COMMAND" in
+              up)
+                echo "Starting NixOS containers for cluster: $CLUSTER_NAME"
+                echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
+                  CONTAINER_NAME="nxc-$CLUSTER_NAME-$NODE"
+                  echo "  - Starting $NODE ($CONTAINER_NAME)..."
+                  
+                  if sudo nixos-container list | grep -q "^$CONTAINER_NAME$"; then
+                    sudo nixos-container update "$CONTAINER_NAME" --system "$TOPLEVEL"
+                  else
+                    sudo nixos-container create "$CONTAINER_NAME" --system "$TOPLEVEL"
+                  fi
+                  sudo nixos-container start "$CONTAINER_NAME"
+                done
+                echo "Cluster is up. Use 'nxc status' to monitor."
+                ;;
+              down)
+                echo "Stopping and destroying NixOS containers..."
+                echo "$NODES" | jq -r 'keys[]' | while read -r NODE; do
+                  CONTAINER_NAME="nxc-$CLUSTER_NAME-$NODE"
+                  echo "  - Stopping $CONTAINER_NAME..."
+                  sudo nixos-container stop "$CONTAINER_NAME" || true
+                  sudo nixos-container destroy "$CONTAINER_NAME" || true
+                done
+                ;;
+              ssh)
+                NODE="''${1:-}"
+                if [ -z "$NODE" ]; then
+                  echo "Usage: nxc ssh <node-name>"
+                  exit 1
+                fi
+                CONTAINER_NAME="nxc-$CLUSTER_NAME-$NODE"
+                
+                if ! sudo nixos-container list | grep -q "^$CONTAINER_NAME$"; then
+                  echo "Error: Container $CONTAINER_NAME is not running."
+                  exit 1
+                fi
 
-                            if [ "$INTERACTIVE" = "true" ]; then
-                              echo "Starting development VMs in interactive mode..."
-                              "${composition.driver}/bin/nixos-test-driver" --interactive
-                            else
-                              echo -n "Starting development VMs in background..."
-                              # We use interactive mode but pipe a script that starts the VMs, waits for SSH, and then pauses.
-                              # This keeps the driver alive without presenting a functional REPL.
-                              "${composition.driver}/bin/nixos-test-driver" --interactive  &
-                              
-                              echo "Cluster is running. Use 'nxc status' to monitor."
-                            fi
-                            ;;
-                          down)
-                            echo "Stopping running VMs..."
-                            # Kill both the driver and the qemu processes
-                            # We use || true to avoid error messages if processes are already gone
-                            pkill -f "nixos-test-driver.*${composition.test.name}" || true
-                            pkill -f "qemu-system.*-name ${composition.test.name}" || echo "No VMs running."
-                            ;;
-                          ssh)
-                            NODE="''${1:-}"
-                            if [ -z "$NODE" ]; then
-                              echo "Usage: nxc ssh <node-name>"
-                              exit 1
-                            fi
-                            PORT=$(echo "$CONNECT_INFO" | jq -r ".\"''${NODE}\".sshPort // empty")
-                            if [ -z "$PORT" ]; then
-                              echo "Error: Unknown node ''${NODE}"
-                              exit 1
-                            fi
-                            
-                            # Create temporary identity file
-                            ID_FILE=$(mktemp)
-                            chmod 600 "$ID_FILE"
-                            cat <<EOF > "$ID_FILE"
-            ${devKeys.private}
-            EOF
-                            
-                            echo "Connecting to ''${NODE} on port ''${PORT}..."
-                            ssh -i "$ID_FILE" -p "''${PORT}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vmuser@localhost
-                            
-                            rm -f "$ID_FILE"
-                            ;;
-                          list)
-                            echo "Configured VMs:"
-                            echo "$CONNECT_INFO" | jq -r 'keys[]' | sed 's/^/- /'
-                            ;;
-                          ip)
-                            NODE="''${1:-}"
-                            if [ -z "$NODE" ]; then
-                              echo "Usage: nxc ip <node-name>"
-                              exit 1
-                            fi
-                            IP=$(echo "$INTERNAL_IPS" | jq -r ".\"''${NODE}\" // empty")
-                            if [ -z "$IP" ]; then
-                              echo "Error: Unknown node ''${NODE}"
-                              exit 1
-                            fi
-                            echo "$IP"
-                            ;;
-                          status)
-                            echo "Cluster Status:"
-                            pgrep -af "qemu-system.*-name ${composition.test.name}" || echo "Cluster is down."
-                            ;;
-                          help|--help|-h)
-                            echo "Usage: nxc [COMMAND]"
-                            echo ""
-                            echo "Available commands:"
-                            echo "  up                       Start development vms"
-                            echo "  down                     Stop running vms"
-                            echo "  ssh <node>               ssh into a running vm"
-                            echo "  status                   Show the status of running vms"
-                            echo "  list                     List all configured vms"
-                            echo "  ip <node>                Print the ip address of a vm"
-                            ;;
-                          *)
-                            echo "Unknown command: $COMMAND"
-                            echo "Run 'nxc help' for usage."
-                            exit 1
-                            ;;
-                        esac
+                echo "Connecting to ''${NODE} via nixos-container run..."
+                sudo nixos-container run "$CONTAINER_NAME" -- login -f vmuser
+                ;;
+              list)
+                echo "Configured Nodes:"
+                echo "$CONNECT_INFO" | jq -r 'keys[]' | sed 's/^/- /'
+                ;;
+              ip)
+                NODE="''${1:-}"
+                if [ -z "$NODE" ]; then
+                  echo "Usage: nxc ip <node-name>"
+                  exit 1
+                fi
+                IP=$(echo "$INTERNAL_IPS" | jq -r ".\"''${NODE}\" // empty")
+                if [ -z "$IP" ]; then
+                  echo "Error: Unknown node ''${NODE}"
+                  exit 1
+                fi
+                echo "$IP"
+                ;;
+              status)
+                echo "Cluster Status ($CLUSTER_NAME):"
+                sudo nixos-container list | grep "nxc-$CLUSTER_NAME-" || echo "No containers running for this cluster."
+                ;;
+              help|--help|-h)
+                echo "Usage: nxc [COMMAND]"
+                echo ""
+                echo "Available commands:"
+                echo "  up                       Start NixOS containers"
+                echo "  down                     Stop and destroy containers"
+                echo "  ssh <node>               Enter a node container"
+                echo "  status                   Show the status of running containers"
+                echo "  list                     List all configured nodes"
+                echo "  ip <node>                Print the internal ip address of a node"
+                ;;
+              *)
+                echo "Unknown command: $COMMAND"
+                echo "Run 'nxc help' for usage."
+                exit 1
+                ;;
+            esac
           '';
         }
       );
