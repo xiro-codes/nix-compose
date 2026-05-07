@@ -43,7 +43,7 @@
                     enable = true;
                     virtualHosts.default = {
                       default = true;
-                      locations."/".return = "200 'OK'";
+                      locations."/".return = "200 'Hello World'";
                     };
                   };
                   networking.firewall.allowedTCPPorts = [ 80 ];
