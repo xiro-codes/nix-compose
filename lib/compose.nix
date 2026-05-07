@@ -185,7 +185,7 @@ in
                               echo -n "Starting development VMs in background..."
                               # We use interactive mode but pipe a script that starts the VMs, waits for SSH, and then pauses.
                               # This keeps the driver alive without presenting a functional REPL.
-                              ${composition.driver}/bin/nixos-test-driver" --interactive > "$LOGS" 2>&1) &
+                              "${composition.driver}/bin/nixos-test-driver" --interactive  &
                               
                               echo "Cluster is running. Use 'nxc status' to monitor."
                             fi
