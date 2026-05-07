@@ -105,41 +105,28 @@ in
         lib.imap0 (i: n: lib.nameValuePair n "10.233.1.${toString (i + 1)}") (lib.attrNames nodes)
       );
 
-      # Wrap each node with our dev module
-      enrichedNodes = lib.listToAttrs (
-        map (
-          { name, sshPort }:
-          lib.nameValuePair name (
-            { ... }:
-            {
-              imports = [
-                nodes.${name}
-                (mkDevModule {
-                  inherit
-                    name
-                    nodes
-                    sshPort
-                    internalIps
-                    ;
-                })
-              ];
-            }
-          )
-        ) nodesWithPorts
-      );
-
-      # Create the NixOS test which acts as our evaluator
-      test = pkgs.testers.nixosTest {
-        inherit name testScript;
-        nodes = enrichedNodes;
-      };
+      # Evaluate each node as a proper NixOS system
+      evaluatedNodes = lib.mapAttrs (
+        nodeName: nodeConf:
+        let
+          _ = validateNames.${nodeName};
+        in
+        lib.nixosSystem {
+          inherit (pkgs) system;
+          modules = [
+            nodeConf
+            (mkDevModule {
+              inherit internalIps nodes;
+              name = nodeName;
+              sshPort = (lib.findFirst (n: n.name == nodeName) {} nodesWithPorts).sshPort or 2222;
+            })
+          ];
+        }
+      ) nodes;
     in
     {
-      inherit test name;
-      driver = test.driver;
-
-      # Export individual container toplevels
-      nodes = lib.mapAttrs (name: node: node.config.system.build.toplevel) test.nodes;
+      inherit name;
+      nodes = lib.mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes;
 
       # A summary of how to connect
       connectInfo = lib.listToAttrs (
@@ -236,8 +223,9 @@ in
                   echo "Running command on ''${NODE}..."
                   sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- su - vmuser -c "$*"
                 else
-                  echo "Connecting to ''${NODE} via nixos-container run..."
-                  sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- su - vmuser
+                  echo "Connecting to ''${NODE} via machinectl shell..."
+                  # machinectl shell provides a proper TTY and environment
+                  sudo machinectl shell "vmuser@$CONTAINER_NAME"
                 fi
                 ;;
               list)
