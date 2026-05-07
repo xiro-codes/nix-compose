@@ -163,6 +163,7 @@ in
       internalIpsJSON = builtins.toJSON composition.internalIps;
       nodesJSON = builtins.toJSON (lib.mapAttrs (n: v: "${v}") composition.nodes);
       clusterName = composition.name;
+      nixosContainer = "${pkgs.nixos-container}/bin/nixos-container";
     in
     {
       type = "app";
@@ -173,7 +174,6 @@ in
             pkgs.openssh
             pkgs.jq
             pkgs.procps
-            pkgs.nixos-container
           ];
           text = ''
             COMMAND="''${1:-help}"
@@ -183,6 +183,10 @@ in
             INTERNAL_IPS='${internalIpsJSON}'
             NODES='${nodesJSON}'
             CLUSTER_NAME="${clusterName}"
+            NIXOS_CONTAINER="${nixosContainer}"
+
+            # Ensure nixos-container can find nixpkgs/nixos during creation/update
+            export NIX_PATH="nixpkgs=${pkgs.path}:''${NIX_PATH:-}"
 
             case "$COMMAND" in
               up)
@@ -192,13 +196,16 @@ in
                   IP=$(echo "$INTERNAL_IPS" | jq -r ".\"$NODE\"")
                   echo "  - Starting $NODE ($CONTAINER_NAME) at $IP..."
                   
-                  if sudo nixos-container list | grep -q "^$CONTAINER_NAME$"; then
-                    sudo nixos-container update "$CONTAINER_NAME" --system "$TOPLEVEL"
+                  if sudo "$NIXOS_CONTAINER" list < /dev/null | grep -q "^$CONTAINER_NAME$"; then
+                    sudo "$NIXOS_CONTAINER" update "$CONTAINER_NAME" --system-path "$TOPLEVEL" < /dev/null
                   else
-                    # We pass the local address so it matches our generated /etc/hosts
-                    sudo nixos-container create "$CONTAINER_NAME" --system "$TOPLEVEL" --local-address "$IP"
+                    # We pass both local and host addresses to ensure proper veth configuration
+                    sudo "$NIXOS_CONTAINER" create "$CONTAINER_NAME" \
+                      --system-path "$TOPLEVEL" \
+                      --local-address "$IP" \
+                      --host-address "10.233.1.254" < /dev/null
                   fi
-                  sudo nixos-container start "$CONTAINER_NAME"
+                  sudo "$NIXOS_CONTAINER" start "$CONTAINER_NAME" < /dev/null
                 done
                 echo "Cluster is up. Use 'nxc status' to monitor."
                 ;;
@@ -207,25 +214,31 @@ in
                 echo "$NODES" | jq -r 'keys[]' | while read -r NODE; do
                   CONTAINER_NAME="$CLUSTER_NAME-$NODE"
                   echo "  - Stopping $CONTAINER_NAME..."
-                  sudo nixos-container stop "$CONTAINER_NAME" || true
-                  sudo nixos-container destroy "$CONTAINER_NAME" || true
+                  sudo "$NIXOS_CONTAINER" stop "$CONTAINER_NAME" < /dev/null || true
+                  sudo "$NIXOS_CONTAINER" destroy "$CONTAINER_NAME" < /dev/null || true
                 done
                 ;;
               ssh)
                 NODE="''${1:-}"
                 if [ -z "$NODE" ]; then
-                  echo "Usage: nxc ssh <node-name>"
+                  echo "Usage: nxc ssh <node-name> [command...]"
                   exit 1
                 fi
+                shift
                 CONTAINER_NAME="$CLUSTER_NAME-$NODE"
                 
-                if ! sudo nixos-container list | grep -q "^$CONTAINER_NAME$"; then
+                if ! sudo "$NIXOS_CONTAINER" list < /dev/null | grep -q "^$CONTAINER_NAME$"; then
                   echo "Error: Container $CONTAINER_NAME is not running."
                   exit 1
                 fi
 
-                echo "Connecting to ''${NODE} via nixos-container run..."
-                sudo nixos-container run "$CONTAINER_NAME" -- login -f vmuser
+                if [ "$#" -gt 0 ]; then
+                  echo "Running command on ''${NODE}..."
+                  sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- su - vmuser -c "$*"
+                else
+                  echo "Connecting to ''${NODE} via nixos-container run..."
+                  sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- su - vmuser
+                fi
                 ;;
               list)
                 echo "Configured Nodes:"
@@ -250,7 +263,7 @@ in
                 ;;
               status)
                 echo "Cluster Status ($CLUSTER_NAME):"
-                sudo nixos-container list | grep "$CLUSTER_NAME-" || echo "No containers running for this cluster."
+                sudo "$NIXOS_CONTAINER" list | grep "$CLUSTER_NAME-" || echo "No containers running for this cluster."
                 ;;
               help|--help|-h)
                 echo "Usage: nxc [COMMAND]"
