@@ -181,7 +181,6 @@ in
                               echo "Starting development VMs in interactive mode..."
                               "${composition.driver}/bin/nixos-test-driver" --interactive
                             else
-                              LOGS=$(mktemp)
                               echo -n "Starting development VMs in background..."
                               # We use interactive mode but pipe a script that starts the VMs, waits for SSH, and then pauses.
                               # This keeps the driver alive without presenting a functional REPL.
