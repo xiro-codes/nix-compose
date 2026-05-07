@@ -60,10 +60,9 @@ let
         chown vmuser:users /home/vmuser/.ssh/id_ed25519.pub
       '';
 
-      # Forward SSH port to host using a dedicated network interface
-      virtualisation.qemu.options = [
-        "-device virtio-net-pci,netdev=sshnet"
-        "-netdev user,id=sshnet,hostfwd=tcp::${toString sshPort}-:22"
+      # Forward SSH port to host
+      virtualisation.forwardPorts = [
+        { from = "host"; host.port = sshPort; guest.port = 22; }
       ];
 
       # Explicitly ensure all nodes are in /etc/hosts
@@ -182,7 +181,7 @@ in
                   echo -n "Starting development VMs in background..."
                   # We use interactive mode but pipe a script that starts the VMs, waits for SSH, and then pauses.
                   # This keeps the driver alive without presenting a functional REPL.
-                  (echo "start_all(); [n.wait_for_unit('sshd') for n in nodes.values()]; print('READY'); import signal; signal.pause()" | "${composition.driver}/bin/nixos-test-driver" --interactive > "$LOGS" 2>&1) &
+                  (echo "start_all(); [n.wait_for_unit('sshd') for n in nodes.values()]; print('READY'); import time; while True: time.sleep(60)" | "${composition.driver}/bin/nixos-test-driver" --interactive > "$LOGS" 2>&1) &
                   
                   until grep -q "READY" "$LOGS" 2>/dev/null; do
                     echo -n "."
