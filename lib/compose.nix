@@ -62,7 +62,11 @@ let
 
       # Forward SSH port to host
       virtualisation.forwardPorts = [
-        { from = "host"; host.port = sshPort; guest.port = 22; }
+        {
+          from = "host";
+          host.port = sshPort;
+          guest.port = 22;
+        }
       ];
 
       # Explicitly ensure all nodes are in /etc/hosts
@@ -156,117 +160,105 @@ in
             pkgs.procps
           ];
           text = ''
-            COMMAND="''${1:-help}"
-            [ "$#" -gt 0 ] && shift
+                        COMMAND="''${1:-help}"
+                        [ "$#" -gt 0 ] && shift
 
-            CONNECT_INFO='${connectInfoJSON}'
-            INTERNAL_IPS='${internalIpsJSON}'
+                        CONNECT_INFO='${connectInfoJSON}'
+                        INTERNAL_IPS='${internalIpsJSON}'
 
-            case "$COMMAND" in
-              up)
-                INTERACTIVE=false
-                # Simple argument parsing
-                for arg in "$@"; do
-                  if [ "$arg" == "--interactive" ] || [ "$arg" == "-i" ]; then
-                    INTERACTIVE=true
-                    break
-                  fi
-                done
+                        case "$COMMAND" in
+                          up)
+                            INTERACTIVE=false
+                            # Simple argument parsing
+                            for arg in "$@"; do
+                              if [ "$arg" == "--interactive" ] || [ "$arg" == "-i" ]; then
+                                INTERACTIVE=true
+                                break
+                              fi
+                            done
 
-                if [ "$INTERACTIVE" = "true" ]; then
-                  echo "Starting development VMs in interactive mode..."
-                  "${composition.driver}/bin/nixos-test-driver" --interactive
-                else
-                  LOGS=$(mktemp)
-                  echo -n "Starting development VMs in background..."
-                  # We use interactive mode but pipe a script that starts the VMs, waits for SSH, and then pauses.
-                  # This keeps the driver alive without presenting a functional REPL.
-                  (echo "start_all(); [n.wait_for_unit('sshd') for n in nodes.values()]; print('READY'); import time; while True: time.sleep(60)" | "${composition.driver}/bin/nixos-test-driver" --interactive > "$LOGS" 2>&1) &
-                  
-                  until grep -q "READY" "$LOGS" 2>/dev/null; do
-                    echo -n "."
-                    sleep 1
-                    # Check if the process died early
-                    if ! pgrep -f "nixos-test-driver.*${composition.test.name}" > /dev/null; then
-                       echo " Failed!"
-                       cat "$LOGS"
-                       exit 1
-                    fi
-                  done
-                  echo " Done!"
-                  echo "Tip: Run 'nxc up --interactive' (or -i) to start with the Python REPL."
-                  echo "Cluster is running. Use 'nxc status' to monitor."
-                fi
-                ;;
-              down)
-                echo "Stopping running VMs..."
-                # Kill both the driver and the qemu processes
-                # We use || true to avoid error messages if processes are already gone
-                pkill -f "nixos-test-driver.*${composition.test.name}" || true
-                pkill -f "qemu-system.*-name ${composition.test.name}" || echo "No VMs running."
-                ;;
-              ssh)
-                NODE="''${1:-}"
-                if [ -z "$NODE" ]; then
-                  echo "Usage: nxc ssh <node-name>"
-                  exit 1
-                fi
-                PORT=$(echo "$CONNECT_INFO" | jq -r ".\"''${NODE}\".sshPort // empty")
-                if [ -z "$PORT" ]; then
-                  echo "Error: Unknown node ''${NODE}"
-                  exit 1
-                fi
-                
-                # Create temporary identity file
-                ID_FILE=$(mktemp)
-                chmod 600 "$ID_FILE"
-                cat <<EOF > "$ID_FILE"
-${devKeys.private}
-EOF
-                
-                echo "Connecting to ''${NODE} on port ''${PORT}..."
-                ssh -i "$ID_FILE" -p "''${PORT}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vmuser@localhost
-                
-                rm -f "$ID_FILE"
-                ;;
-              list)
-                echo "Configured VMs:"
-                echo "$CONNECT_INFO" | jq -r 'keys[]' | sed 's/^/- /'
-                ;;
-              ip)
-                NODE="''${1:-}"
-                if [ -z "$NODE" ]; then
-                  echo "Usage: nxc ip <node-name>"
-                  exit 1
-                fi
-                IP=$(echo "$INTERNAL_IPS" | jq -r ".\"''${NODE}\" // empty")
-                if [ -z "$IP" ]; then
-                  echo "Error: Unknown node ''${NODE}"
-                  exit 1
-                fi
-                echo "$IP"
-                ;;
-              status)
-                echo "Cluster Status:"
-                pgrep -af "qemu-system.*-name ${composition.test.name}" || echo "Cluster is down."
-                ;;
-              help|--help|-h)
-                echo "Usage: nxc [COMMAND]"
-                echo ""
-                echo "Available commands:"
-                echo "  up                       Start development vms"
-                echo "  down                     Stop running vms"
-                echo "  ssh <node>               ssh into a running vm"
-                echo "  status                   Show the status of running vms"
-                echo "  list                     List all configured vms"
-                echo "  ip <node>                Print the ip address of a vm"
-                ;;
-              *)
-                echo "Unknown command: $COMMAND"
-                echo "Run 'nxc help' for usage."
-                exit 1
-                ;;
-            esac
+                            if [ "$INTERACTIVE" = "true" ]; then
+                              echo "Starting development VMs in interactive mode..."
+                              "${composition.driver}/bin/nixos-test-driver" --interactive
+                            else
+                              LOGS=$(mktemp)
+                              echo -n "Starting development VMs in background..."
+                              # We use interactive mode but pipe a script that starts the VMs, waits for SSH, and then pauses.
+                              # This keeps the driver alive without presenting a functional REPL.
+                              ${composition.driver}/bin/nixos-test-driver" --interactive > "$LOGS" 2>&1) &
+                              
+                              echo "Cluster is running. Use 'nxc status' to monitor."
+                            fi
+                            ;;
+                          down)
+                            echo "Stopping running VMs..."
+                            # Kill both the driver and the qemu processes
+                            # We use || true to avoid error messages if processes are already gone
+                            pkill -f "nixos-test-driver.*${composition.test.name}" || true
+                            pkill -f "qemu-system.*-name ${composition.test.name}" || echo "No VMs running."
+                            ;;
+                          ssh)
+                            NODE="''${1:-}"
+                            if [ -z "$NODE" ]; then
+                              echo "Usage: nxc ssh <node-name>"
+                              exit 1
+                            fi
+                            PORT=$(echo "$CONNECT_INFO" | jq -r ".\"''${NODE}\".sshPort // empty")
+                            if [ -z "$PORT" ]; then
+                              echo "Error: Unknown node ''${NODE}"
+                              exit 1
+                            fi
+                            
+                            # Create temporary identity file
+                            ID_FILE=$(mktemp)
+                            chmod 600 "$ID_FILE"
+                            cat <<EOF > "$ID_FILE"
+            ${devKeys.private}
+            EOF
+                            
+                            echo "Connecting to ''${NODE} on port ''${PORT}..."
+                            ssh -i "$ID_FILE" -p "''${PORT}" -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null vmuser@localhost
+                            
+                            rm -f "$ID_FILE"
+                            ;;
+                          list)
+                            echo "Configured VMs:"
+                            echo "$CONNECT_INFO" | jq -r 'keys[]' | sed 's/^/- /'
+                            ;;
+                          ip)
+                            NODE="''${1:-}"
+                            if [ -z "$NODE" ]; then
+                              echo "Usage: nxc ip <node-name>"
+                              exit 1
+                            fi
+                            IP=$(echo "$INTERNAL_IPS" | jq -r ".\"''${NODE}\" // empty")
+                            if [ -z "$IP" ]; then
+                              echo "Error: Unknown node ''${NODE}"
+                              exit 1
+                            fi
+                            echo "$IP"
+                            ;;
+                          status)
+                            echo "Cluster Status:"
+                            pgrep -af "qemu-system.*-name ${composition.test.name}" || echo "Cluster is down."
+                            ;;
+                          help|--help|-h)
+                            echo "Usage: nxc [COMMAND]"
+                            echo ""
+                            echo "Available commands:"
+                            echo "  up                       Start development vms"
+                            echo "  down                     Stop running vms"
+                            echo "  ssh <node>               ssh into a running vm"
+                            echo "  status                   Show the status of running vms"
+                            echo "  list                     List all configured vms"
+                            echo "  ip <node>                Print the ip address of a vm"
+                            ;;
+                          *)
+                            echo "Unknown command: $COMMAND"
+                            echo "Run 'nxc help' for usage."
+                            exit 1
+                            ;;
+                        esac
           '';
         }
       );
