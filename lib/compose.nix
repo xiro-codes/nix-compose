@@ -303,6 +303,7 @@ in
                   
                   if [ "$FIRST_NODE" = true ]; then
                     tmux new-session -d -s "$SESSION_NAME" -n "$NODE" "$CMD"
+                    tmux set-option -t "$SESSION_NAME" mouse on
                     FIRST_NODE=false
                   else
                     tmux new-window -t "$SESSION_NAME" -n "$NODE" "$CMD"
