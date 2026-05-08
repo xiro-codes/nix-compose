@@ -32,6 +32,21 @@ let
       # Container specific settings
       boot.isContainer = true;
 
+      # Networking configuration
+      networking.hostName = name;
+      networking.useDHCP = false;
+      networking.usePredictableInterfaceNames = false;
+      networking.interfaces.eth0.ipv4.addresses = [
+        {
+          address = internalIps.${name};
+          prefixLength = 24;
+        }
+      ];
+      networking.defaultGateway = "10.233.1.254";
+
+      # Allow all traffic on the internal interface for ease of use in the cluster
+      networking.firewall.trustedInterfaces = [ "eth0" ];
+
       # Enable SSH for remote access (optional but nice)
       services.openssh.enable = true;
       services.openssh.settings.PermitRootLogin = "yes";
