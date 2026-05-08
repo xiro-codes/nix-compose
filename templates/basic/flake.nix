@@ -41,6 +41,10 @@
                 {
                   services.nginx = {
                     enable = true;
+                    config = ''
+                      error_log /dev/stderr info;
+                      access_log /dev/stdout;
+                    '';
                     virtualHosts.default = {
                       default = true;
                       locations."/".return = "200 'Hello World'";
