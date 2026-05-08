@@ -59,8 +59,10 @@ let
         openssh.authorizedKeys.keys = [ devKeys.public ];
       };
       services.nginx = {
-        appendConfig = "error_log /dev/stderr info;";
-        commonHttpConfig = "access_log /dev/stderr;";
+        appendHttpConfig = ''
+          error_log syslog:server=unix:/dev/log;
+          access_log syslog:server=unix:/dev/log combined;
+        '';
       };
       # Allow passwordless sudo for vmuser
       security.sudo.wheelNeedsPassword = false;
