@@ -162,6 +162,7 @@ in
           name = "nxc";
           runtimeInputs = [
             pkgs.nix
+            pkgs.iproute2
             pkgs.openssh
             pkgs.jq
             pkgs.procps
@@ -181,6 +182,12 @@ in
 
             case "$COMMAND" in
               up)
+                BRIDGE_NAME="br-''${CLUSTER_NAME:0:12}"
+                echo "Ensuring bridge $BRIDGE_NAME for cluster: $CLUSTER_NAME"
+                sudo ip link add name "$BRIDGE_NAME" type bridge 2>/dev/null || true
+                sudo ip link set "$BRIDGE_NAME" up
+                sudo ip addr add 10.233.1.254/24 dev "$BRIDGE_NAME" 2>/dev/null || true
+
                 echo "Starting NixOS containers for cluster: $CLUSTER_NAME"
                 echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
                   CONTAINER_NAME="$CLUSTER_NAME-$NODE"
@@ -199,6 +206,7 @@ in
                     # We pass both local and host addresses to ensure proper veth configuration
                     sudo "$NIXOS_CONTAINER" create "$CONTAINER_NAME" \
                       --system-path "$TOPLEVEL" \
+                      --bridge "$BRIDGE_NAME" \
                       --local-address "$IP" \
                       --host-address "10.233.1.254" < /dev/null
                   fi
@@ -214,6 +222,9 @@ in
                   sudo "$NIXOS_CONTAINER" stop "$CONTAINER_NAME" < /dev/null || true
                   sudo "$NIXOS_CONTAINER" destroy "$CONTAINER_NAME" < /dev/null || true
                 done
+                BRIDGE_NAME="br-''${CLUSTER_NAME:0:12}"
+                echo "Removing bridge $BRIDGE_NAME..."
+                sudo ip link delete "$BRIDGE_NAME" 2>/dev/null || true
                 ;;
               ssh)
                 NODE="''${1:-}"
