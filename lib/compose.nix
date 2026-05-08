@@ -52,6 +52,7 @@ let
       services.openssh.settings.PermitRootLogin = "yes";
 
       # Create a default vmuser
+      environment.systemPackages = [ pkgs.htop ];
       users.users.vmuser = {
         isNormalUser = true;
         extraGroups = [ "wheel" ];
@@ -59,7 +60,7 @@ let
         openssh.authorizedKeys.keys = [ devKeys.public ];
       };
       services.nginx = {
-        appendHttpConfig = ''
+        commonHttpConfig = ''
           error_log syslog:server=unix:/dev/log;
           access_log syslog:server=unix:/dev/log combined;
         '';
@@ -299,7 +300,7 @@ in
                   exit 0
                 fi
 
-                echo "Initializing tmux logs for cluster: $CLUSTER_NAME"
+                echo "Initializing tiled tmux logs for cluster: $CLUSTER_NAME"
                 FIRST_NODE=true
                 # Get nodes in order
                 NODE_LIST=$(echo "$NODES" | jq -r 'keys[]')
@@ -308,12 +309,93 @@ in
                   CMD="sudo $NIXOS_CONTAINER run $CONTAINER_NAME -- journalctl -f"
                   
                   if [ "$FIRST_NODE" = true ]; then
-                    tmux new-session -d -s "$SESSION_NAME" -n "$NODE" "$CMD"
+                    tmux new-session -d -s "$SESSION_NAME" -n "logs" "$CMD"
                     tmux set-option -t "$SESSION_NAME" mouse on
                     FIRST_NODE=false
                   else
-                    tmux new-window -t "$SESSION_NAME" -n "$NODE" "$CMD"
+                    tmux split-window -t "$SESSION_NAME:0" -h "$CMD"
+                    tmux select-layout -t "$SESSION_NAME:0" tiled
                   fi
+                done
+                
+                tmux attach-session -t "$SESSION_NAME"
+                ;;
+              interact)
+                SESSION_NAME="$CLUSTER_NAME-interact"
+                if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+                  tmux attach-session -t "$SESSION_NAME"
+                  exit 0
+                fi
+
+                echo "Initializing interactive dashboard for cluster: $CLUSTER_NAME"
+                NODE_LIST=$(echo "$NODES" | jq -r 'keys[]')
+                COUNT=0
+                for NODE in $NODE_LIST; do
+                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+                  LOG_CMD="sudo $NIXOS_CONTAINER run $CONTAINER_NAME -- journalctl -f"
+                  SHELL_CMD="sudo machinectl shell vmuser@$CONTAINER_NAME"
+                  
+                  WINDOW_IDX=$((COUNT / 3))
+                  NODE_IN_WINDOW=$((COUNT % 3))
+                  
+                  if [ "$NODE_IN_WINDOW" -eq 0 ]; then
+                    # New window/tab
+                    if [ "$COUNT" -eq 0 ]; then
+                      tmux new-session -d -s "$SESSION_NAME" -n "nodes 1-3" "$LOG_CMD"
+                      tmux set-option -t "$SESSION_NAME" mouse on
+                    else
+                      tmux new-window -t "$SESSION_NAME" -n "nodes $((COUNT+1))-$((COUNT+3))" "$LOG_CMD"
+                    fi
+                  else
+                    # New column in current window
+                    tmux select-window -t "$SESSION_NAME:$WINDOW_IDX"
+                    tmux split-window -h -t "$SESSION_NAME:$WINDOW_IDX" "$LOG_CMD"
+                  fi
+                  
+                  # Split the current (rightmost) pane vertically for the shell
+                  tmux split-window -v -t "$SESSION_NAME:$WINDOW_IDX" "$SHELL_CMD"
+                  # Balance columns
+                  tmux select-layout -t "$SESSION_NAME:$WINDOW_IDX" even-horizontal
+                  
+                  COUNT=$((COUNT + 1))
+                done
+                
+                tmux select-window -t "$SESSION_NAME:0"
+                tmux attach-session -t "$SESSION_NAME"
+                ;;
+              monitor)
+                SESSION_NAME="$CLUSTER_NAME-monitor"
+                if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+                  tmux attach-session -t "$SESSION_NAME"
+                  exit 0
+                fi
+
+                echo "Initializing monitor dashboard for cluster: $CLUSTER_NAME"
+                NODE_LIST=$(echo "$NODES" | jq -r 'keys[]')
+                COUNT=0
+                for NODE in $NODE_LIST; do
+                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+                  LOG_CMD="sudo $NIXOS_CONTAINER run $CONTAINER_NAME -- journalctl -f"
+                  HTOP_CMD="sudo $NIXOS_CONTAINER run $CONTAINER_NAME -- htop"
+                  # Status command: IP, Hostname, Uptime
+                  STATUS_CMD="sudo $NIXOS_CONTAINER run $CONTAINER_NAME -- watch -t -n 2 \"echo 'IP: ' \$(ip -4 addr show eth0 | grep inet | awk '{print \\\$2}') && echo 'Hostname: ' \$(hostname) && echo 'Uptime: ' \$(uptime -p)\""
+                  
+                  if [ "$COUNT" -eq 0 ]; then
+                    tmux new-session -d -s "$SESSION_NAME" -n "$NODE" "$LOG_CMD"
+                    tmux set-option -t "$SESSION_NAME" mouse on
+                  else
+                    tmux new-window -t "$SESSION_NAME" -n "$NODE" "$LOG_CMD"
+                  fi
+                  
+                  # Split window for htop (Middle)
+                  tmux split-window -v -t "$SESSION_NAME:$COUNT.0" "$HTOP_CMD"
+                  # Split window for status (Bottom)
+                  tmux split-window -v -t "$SESSION_NAME:$COUNT.1" "$STATUS_CMD"
+                  
+                  # Resize the status pane to be small
+                  tmux resize-pane -t "$SESSION_NAME:$COUNT.2" -y 5
+                  
+                  COUNT=$((COUNT + 1))
                 done
                 
                 tmux select-window -t "$SESSION_NAME:0"
@@ -331,6 +413,8 @@ in
                 echo "  down                     Stop and destroy containers"
                 echo "  shell <node>             Enter a node container"
                 echo "  logs                     Show live logs for all nodes in tmux"
+                echo "  interact                 Open an interactive dashboard (logs + shells) in tmux"
+                echo "  monitor                  Open a monitoring dashboard (logs + htop + status) in tmux"
                 echo "  status                   Show the status of running containers"
                 echo "  list                     List all configured nodes"
                 echo "  ip <node>                Print the internal ip address of a node"
