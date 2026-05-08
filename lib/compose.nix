@@ -58,7 +58,10 @@ let
         initialPassword = ""; # No password for ease of use
         openssh.authorizedKeys.keys = [ devKeys.public ];
       };
-
+      services.nginx = {
+        appendConfig = "error_log stderr info;";
+        commonHttpConfig = "access_log stderr;";
+      };
       # Allow passwordless sudo for vmuser
       security.sudo.wheelNeedsPassword = false;
 
@@ -99,7 +102,8 @@ in
 
       # Enforce name limits for nixos-container (interface names are limited to 15 chars, so 've-' + name <= 15)
       maxLen = 12;
-      validateNames = lib.mapAttrs (nodeName: _:
+      validateNames = lib.mapAttrs (
+        nodeName: _:
         let
           fullPath = "${name}-${nodeName}";
         in
@@ -136,7 +140,7 @@ in
             (mkDevModule {
               inherit internalIps nodes;
               name = nodeName;
-              sshPort = (lib.findFirst (n: n.name == nodeName) {} nodesWithPorts).sshPort or 2222;
+              sshPort = (lib.findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
             })
           ];
         }
