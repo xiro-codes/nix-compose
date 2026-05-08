@@ -161,6 +161,7 @@ in
         pkgs.writeShellApplication {
           name = "nxc";
           runtimeInputs = [
+            pkgs.nix
             pkgs.openssh
             pkgs.jq
             pkgs.procps
@@ -184,11 +185,17 @@ in
                 echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
                   CONTAINER_NAME="$CLUSTER_NAME-$NODE"
                   IP=$(echo "$INTERNAL_IPS" | jq -r ".\"$NODE\"")
-                  echo "  - Starting $NODE ($CONTAINER_NAME) at $IP..."
                   
                   if sudo "$NIXOS_CONTAINER" list < /dev/null | grep -q "^$CONTAINER_NAME$"; then
-                    sudo "$NIXOS_CONTAINER" update "$CONTAINER_NAME" --system-path "$TOPLEVEL" < /dev/null
+                    echo "  - Updating $NODE ($CONTAINER_NAME) to $TOPLEVEL..."
+                    # Update the system profile for the container
+                    sudo nix-env -p "/nix/var/nix/profiles/per-container/$CONTAINER_NAME/system" --set "$TOPLEVEL"
+                    # If running, trigger a switch-to-configuration
+                    if [ "$(sudo "$NIXOS_CONTAINER" status "$CONTAINER_NAME" < /dev/null)" = "up" ]; then
+                       sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- /nix/var/nix/profiles/system/bin/switch-to-configuration switch
+                    fi
                   else
+                    echo "  - Creating $NODE ($CONTAINER_NAME) at $IP..."
                     # We pass both local and host addresses to ensure proper veth configuration
                     sudo "$NIXOS_CONTAINER" create "$CONTAINER_NAME" \
                       --system-path "$TOPLEVEL" \
