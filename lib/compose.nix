@@ -178,6 +178,7 @@ in
           runtimeInputs = [
             pkgs.nix
             pkgs.iproute2
+            pkgs.tmux
             pkgs.openssh
             pkgs.jq
             pkgs.procps
@@ -285,6 +286,32 @@ in
                 echo "# Nix-Compose Hosts for $CLUSTER_NAME"
                 echo "$INTERNAL_IPS" | jq -r 'to_entries[] | "\(.value) \(.key)"'
                 ;;
+              logs)
+                SESSION_NAME="$CLUSTER_NAME-logs"
+                if tmux has-session -t "$SESSION_NAME" 2>/dev/null; then
+                  tmux attach-session -t "$SESSION_NAME"
+                  exit 0
+                fi
+
+                echo "Initializing tmux logs for cluster: $CLUSTER_NAME"
+                FIRST_NODE=true
+                # Get nodes in order
+                NODE_LIST=$(echo "$NODES" | jq -r 'keys[]')
+                for NODE in $NODE_LIST; do
+                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+                  CMD="sudo $NIXOS_CONTAINER run $CONTAINER_NAME -- journalctl -f"
+                  
+                  if [ "$FIRST_NODE" = true ]; then
+                    tmux new-session -d -s "$SESSION_NAME" -n "$NODE" "$CMD"
+                    FIRST_NODE=false
+                  else
+                    tmux new-window -t "$SESSION_NAME" -n "$NODE" "$CMD"
+                  fi
+                done
+                
+                tmux select-window -t "$SESSION_NAME:0"
+                tmux attach-session -t "$SESSION_NAME"
+                ;;
               status)
                 echo "Cluster Status ($CLUSTER_NAME):"
                 sudo "$NIXOS_CONTAINER" list | grep "$CLUSTER_NAME-" || echo "No containers running for this cluster."
@@ -295,7 +322,8 @@ in
                 echo "Available commands:"
                 echo "  up                       Start NixOS containers"
                 echo "  down                     Stop and destroy containers"
-                echo "  ssh <node>               Enter a node container"
+                echo "  shell <node>             Enter a node container"
+                echo "  logs                     Show live logs for all nodes in tmux"
                 echo "  status                   Show the status of running containers"
                 echo "  list                     List all configured nodes"
                 echo "  ip <node>                Print the internal ip address of a node"
