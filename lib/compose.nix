@@ -241,10 +241,10 @@ in
                 echo "Removing bridge $BRIDGE_NAME..."
                 sudo ip link delete "$BRIDGE_NAME" 2>/dev/null || true
                 ;;
-              ssh)
+              shell)
                 NODE="''${1:-}"
                 if [ -z "$NODE" ]; then
-                  echo "Usage: nxc ssh <node-name> [command...]"
+                  echo "Usage: nxc shell <node-name> [command...]"
                   exit 1
                 fi
                 shift
