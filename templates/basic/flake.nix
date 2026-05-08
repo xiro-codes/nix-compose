@@ -77,7 +77,7 @@
               echo "Available commands:"
               echo "  nix run . up          - Start the containers (requires sudo)"
               echo "  nix run . down        - Stop and destroy containers"
-              echo "  nix run . ssh srv     - Enter the 'srv' container"
+              echo "  nix run . shell srv     - Enter the 'srv' container"
               echo "  nix run . status      - Show cluster status"
               echo "  just build            - Build all container toplevels"
             '';
