@@ -46,6 +46,7 @@ let
 
       # Allow all traffic on the internal interface for ease of use in the cluster
       networking.firewall.trustedInterfaces = [ "eth0" ];
+      networking.firewall.checkReversePath = false;
 
       # Enable SSH for remote access (optional but nice)
       services.openssh.enable = true;
@@ -189,6 +190,7 @@ in
             pkgs.openssh
             pkgs.jq
             pkgs.procps
+            pkgs.iptables
           ];
           text = ''
             COMMAND="''${1:-help}"
@@ -210,6 +212,8 @@ in
                 sudo ip link add name "$BRIDGE_NAME" type bridge 2>/dev/null || true
                 sudo ip link set "$BRIDGE_NAME" up
                 sudo ip addr add 10.233.1.254/24 dev "$BRIDGE_NAME" 2>/dev/null || true
+                sudo iptables -I INPUT -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
+                sudo iptables -I FORWARD -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
 
                 echo "Starting NixOS containers for cluster: $CLUSTER_NAME"
                 echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
@@ -247,6 +251,8 @@ in
                 done
                 BRIDGE_NAME="br-''${CLUSTER_NAME:0:12}"
                 echo "Removing bridge $BRIDGE_NAME..."
+                sudo iptables -D INPUT -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
+                sudo iptables -D FORWARD -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
                 sudo ip link delete "$BRIDGE_NAME" 2>/dev/null || true
                 ;;
               shell)
