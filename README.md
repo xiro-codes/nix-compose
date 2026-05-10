@@ -8,7 +8,7 @@ A lightweight, multi-node NixOS container orchestration library implemented in p
 ## Features
 
 - **Pure Nix**: No external binaries or heavy dependencies required—just Nix.
-- **Fast Startup**: Uses NixOS Containers (`nixos-container`) instead of QEMU VMs for near-instant boot times.
+- **Flake Integration**: Makes it easier to handle containers provided by a project flake.
 - **Unified CLI**: Emulates the `nixos-compose` experience (`up`, `down`, `ssh`, `status`, etc.) via a Flake app.
 - **Automatic Networking**: Seamless node-to-node connectivity using internal container networks.
 
