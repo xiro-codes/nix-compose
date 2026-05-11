@@ -2,34 +2,52 @@
 import sys
 import json
 import subprocess
-import shutil
 import argparse
-
 import os
+import shlex
 
-config_path = os.environ.get('NXC_CONFIG')
-if not config_path:
-    print("Error: NXC_CONFIG environment variable not set.", file=sys.stderr)
-    sys.exit(1)
 
-with open(config_path, 'r') as f:
-    config = json.load(f)
+class CLIError(Exception):
+    pass
 
-CONNECT_INFO = config.get('connectInfo', {})
-INTERNAL_IPS = config.get('internalIps', {})
-NODES = config.get('nodes', {})
-ORDERED_NODES = config.get('orderedNodes', [])
-CONTAINER_NAMES = config.get('containerNames', {})
-CLUSTER_NAME = config.get('clusterName', '')
-CLUSTER_HASH = config.get('clusterHash', '')
-BRIDGE_IP = config.get('bridgeIp', '')
-NIXOS_CONTAINER = config.get('nixosContainer', '')
-NIXPKGS_PATH = config.get('nixpkgsPath', '')
+# Global config to be initialized
+CONNECT_INFO = {}
+INTERNAL_IPS = {}
+NODES = {}
+ORDERED_NODES = []
+CONTAINER_NAMES = {}
+CLUSTER_NAME = ''
+CLUSTER_HASH = ''
+BRIDGE_IP = ''
+NIXOS_CONTAINER = ''
+NIXPKGS_PATH = ''
+
+def init_config():
+    global CONNECT_INFO, INTERNAL_IPS, NODES, ORDERED_NODES
+    global CONTAINER_NAMES, CLUSTER_NAME, CLUSTER_HASH, BRIDGE_IP
+    global NIXOS_CONTAINER, NIXPKGS_PATH
+
+    config_path = os.environ.get('NXC_CONFIG')
+    if not config_path:
+        raise CLIError("NXC_CONFIG environment variable not set.")
+
+    with open(config_path, 'r') as f:
+        config = json.load(f)
+
+    CONNECT_INFO = config.get('connectInfo', {})
+    INTERNAL_IPS = config.get('internalIps', {})
+    NODES = config.get('nodes', {})
+    ORDERED_NODES = config.get('orderedNodes', [])
+    CONTAINER_NAMES = config.get('containerNames', {})
+    CLUSTER_NAME = config.get('clusterName', '')
+    CLUSTER_HASH = config.get('clusterHash', '')
+    BRIDGE_IP = config.get('bridgeIp', '')
+    NIXOS_CONTAINER = config.get('nixosContainer', '')
+    NIXPKGS_PATH = config.get('nixpkgsPath', '')
 
 def require_root():
     if os.geteuid() != 0:
-        print("Error: This command requires root privileges. Please run 'nxc' with sudo.", file=sys.stderr)
-        sys.exit(1)
+        raise CLIError("This command requires root privileges. Please run 'nxc' with sudo.")
 
 
 def run(cmd, capture_output=False, check=True):
@@ -55,9 +73,7 @@ def check_ip_conflicts(bridge_name):
             if BRIDGE_IP in line:
                 parts = line.split()
                 if parts[-1] != bridge_name:
-                    print(f"Error: Bridge IP {BRIDGE_IP} is already in use by interface {parts[-1]}")
-                    print("Please use a different subnet for this composition.")
-                    sys.exit(1)
+                    raise CLIError(f"Bridge IP {BRIDGE_IP} is already in use by interface {parts[-1]}. Please use a different subnet for this composition.")
     except subprocess.CalledProcessError:
         pass
 
@@ -88,7 +104,6 @@ def cmd_up():
 
     print(f"Starting NixOS containers for cluster: {CLUSTER_NAME} ({CLUSTER_HASH})")
     # Ensure NIX_PATH is set for nixos-container
-    import os
     os.environ["NIX_PATH"] = f"nixpkgs={NIXPKGS_PATH}:{os.environ.get('NIX_PATH', '')}"
 
     for node in ORDERED_NODES:
@@ -146,18 +161,16 @@ def cmd_status():
 def cmd_ssh(node, command_args=None):
     require_root()
     if node not in CONTAINER_NAMES:
-        print(f"Error: Unknown node {node}")
-        sys.exit(1)
+        raise CLIError(f"Unknown node {node}")
     
     container_name = CONTAINER_NAMES[node]
     list_result = run([NIXOS_CONTAINER, "list"], capture_output=True)
     if container_name not in list_result.stdout.splitlines():
-        print(f"Error: Container {container_name} is not running.")
-        sys.exit(1)
+        raise CLIError(f"Container {container_name} is not running.")
 
     if command_args:
         print(f"Running command on {node}...")
-        full_cmd = ["su", "-", "vmuser", "-c", " ".join(command_args)]
+        full_cmd = ["su", "-", "vmuser", "-c", shlex.join(command_args)]
         run([NIXOS_CONTAINER, "run", container_name, "--"] + full_cmd)
     else:
         print(f"Connecting to {node} via machinectl shell...")
@@ -166,8 +179,7 @@ def cmd_ssh(node, command_args=None):
 def cmd_logs(node):
     require_root()
     if node not in CONTAINER_NAMES:
-        print(f"Error: Unknown node {node}")
-        sys.exit(1)
+        raise CLIError(f"Unknown node {node}")
     container_name = CONTAINER_NAMES[node]
     print(f"Showing live logs for {node} ({container_name})...")
     subprocess.run([NIXOS_CONTAINER, "run", container_name, "--", "journalctl", "-f"])
@@ -175,8 +187,7 @@ def cmd_logs(node):
 def cmd_ip(node):
     ip = INTERNAL_IPS.get(node)
     if not ip:
-        print(f"Error: Unknown node {node}", file=sys.stderr)
-        sys.exit(1)
+        raise CLIError(f"Unknown node {node}")
     print(ip)
 
 def cmd_hosts():
@@ -185,6 +196,12 @@ def cmd_hosts():
         print(f"{ip} {node}")
 
 def main():
+    try:
+        init_config()
+    except CLIError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+
     parser = argparse.ArgumentParser(prog=f"nxc-{CLUSTER_NAME}", description="Nix-Compose CLI")
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
@@ -212,26 +229,30 @@ def main():
 
     args = parser.parse_args()
 
-    if args.command == "up":
-        cmd_up()
-    elif args.command == "down":
-        cmd_down()
-    elif args.command in ["ssh", "shell"]:
-        cmd_ssh(args.node, args.args)
-    elif args.command == "logs":
-        cmd_logs(args.node)
-    elif args.command == "status":
-        cmd_status()
-    elif args.command == "list":
-        print("Configured Nodes:")
-        for node in ORDERED_NODES:
-            print(f"  - {node}")
-    elif args.command == "ip":
-        cmd_ip(args.node)
-    elif args.command == "hosts":
-        cmd_hosts()
-    else:
-        parser.print_help()
+    try:
+        if args.command == "up":
+            cmd_up()
+        elif args.command == "down":
+            cmd_down()
+        elif args.command in ["ssh", "shell"]:
+            cmd_ssh(args.node, args.args)
+        elif args.command == "logs":
+            cmd_logs(args.node)
+        elif args.command == "status":
+            cmd_status()
+        elif args.command == "list":
+            print("Configured Nodes:")
+            for node in ORDERED_NODES:
+                print(f"  - {node}")
+        elif args.command == "ip":
+            cmd_ip(args.node)
+        elif args.command == "hosts":
+            cmd_hosts()
+        else:
+            parser.print_help()
+    except CLIError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()
