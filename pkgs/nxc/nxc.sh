@@ -4,6 +4,7 @@ COMMAND="${1:-help}"
 CONNECT_INFO='@connectInfoJSON@'
 INTERNAL_IPS='@internalIpsJSON@'
 NODES='@nodesJSON@'
+ORDERED_NODES='@orderedNodesJSON@'
 CONTAINER_NAMES='@containerNamesJSON@'
 CLUSTER_NAME="@clusterName@"
 CLUSTER_HASH="@clusterHash@"
@@ -32,7 +33,8 @@ case "$COMMAND" in
     done
 
     echo "Starting NixOS containers for cluster: $CLUSTER_NAME ($CLUSTER_HASH)"
-    echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
+    echo "$ORDERED_NODES" | jq -r '.[]' | while read -r NODE; do
+      TOPLEVEL=$(echo "$NODES" | jq -r ".\"$NODE\"")
       CONTAINER_NAME=$(echo "$CONTAINER_NAMES" | jq -r ".\"$NODE\"")
       IP=$(echo "$INTERNAL_IPS" | jq -r ".\"$NODE\"")
       
@@ -59,7 +61,9 @@ case "$COMMAND" in
     ;;
   down)
     echo "Stopping and destroying NixOS containers..."
-    echo "$CONTAINER_NAMES" | jq -r '.[]' | while read -r CONTAINER_NAME; do
+    # Process nodes in reverse order for shutdown
+    echo "$ORDERED_NODES" | jq -r 'reverse | .[]' | while read -r NODE; do
+      CONTAINER_NAME=$(echo "$CONTAINER_NAMES" | jq -r ".\"$NODE\"")
       echo "  - Stopping $CONTAINER_NAME..."
       sudo "$NIXOS_CONTAINER" stop "$CONTAINER_NAME" < /dev/null || true
       sudo "$NIXOS_CONTAINER" destroy "$CONTAINER_NAME" < /dev/null || true

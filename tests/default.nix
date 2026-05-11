@@ -104,4 +104,76 @@ in
       fi
       touch $out
     '';
+
+  # Ordering test
+  ordering =
+    let
+      c = lib-compose.mkCompose {
+        name = "ordered-cluster";
+        nodes = {
+          node1 = { ... }: { };
+          node2 = { ... }: { };
+        };
+        nodeConfig = {
+          node1 = { order = 2; };
+          node2 = { order = 1; };
+        };
+      };
+      eval = c.perSystem pkgs;
+    in
+    pkgs.runCommand "test-ordering" { buildInputs = [ pkgs.jq ]; } ''
+      echo "Checking if node2 comes before node1 in the package's nxc script..."
+      SCRIPT_CONTENT=$(cat ${eval.packages.ordered-cluster}/bin/nxc-ordered-cluster)
+      ORDERED_NODES=$(echo "$SCRIPT_CONTENT" | grep "ORDERED_NODES=" | cut -d"'" -f2)
+      FIRST_NODE=$(echo "$ORDERED_NODES" | jq -r '.[0]')
+      if [[ "$FIRST_NODE" != "node2" ]]; then
+        echo "Error: Expected node2 first, found $FIRST_NODE"
+        echo "Ordered nodes: $ORDERED_NODES"
+        exit 1
+      fi
+      touch $out
+    '';
+
+  # autoStart test
+  autostart =
+    let
+      c = lib-compose.mkCompose {
+        name = "autostart-cluster";
+        nodes = {
+          node1 = { ... }: { };
+          node2 = { ... }: { };
+        };
+      };
+      nixosEval = import (pkgs.path + "/nixos/lib/eval-config.nix") {
+        inherit (pkgs) system;
+        modules = [
+          c.nixosModule
+          {
+            nxc.compose.autostart-cluster = {
+              enable = true;
+              autoStart = false;
+              nodes.node1.autoStart = true;
+            };
+            fileSystems."/" = { device = "/dev/null"; };
+            boot.loader.grub.enable = false;
+          }
+        ];
+      };
+    in
+    pkgs.runCommand "test-autostart" { buildInputs = [ pkgs.jq ]; } ''
+      echo "Checking container autoStart settings..."
+      # Extract attributes to find hashed names
+      NODES_JSON='${builtins.toJSON (builtins.mapAttrs (n: v: v.autoStart) nixosEval.config.containers)}'
+      
+      NODE1_VAL=$(echo "$NODES_JSON" | jq -r 'to_entries[] | select(.key | startswith("node1-")) | .value')
+      NODE2_VAL=$(echo "$NODES_JSON" | jq -r 'to_entries[] | select(.key | startswith("node2-")) | .value')
+      
+      echo "node1 autoStart: $NODE1_VAL"
+      echo "node2 autoStart: $NODE2_VAL"
+      
+      [[ "$NODE1_VAL" == "true" ]]
+      [[ "$NODE2_VAL" == "false" ]]
+      
+      touch $out
+    '';
 }

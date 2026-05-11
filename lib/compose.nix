@@ -96,7 +96,11 @@ let
     }:
     let
       inherit (pkgs) lib;
-      inherit (lib) mapAttrs;
+      inherit (lib) mapAttrs attrNames sort;
+
+      orderedNodes = sort (a: b:
+        (composition.nodeConfig.${a}.order or 1000) < (composition.nodeConfig.${b}.order or 1000)
+      ) (attrNames composition.nodes');
 
       nxcScript = pkgs.writeText "nxc.sh" (
         builtins.replaceStrings
@@ -104,6 +108,7 @@ let
             "@connectInfoJSON@"
             "@internalIpsJSON@"
             "@nodesJSON@"
+            "@orderedNodesJSON@"
             "@containerNamesJSON@"
             "@clusterName@"
             "@clusterHash@"
@@ -114,6 +119,7 @@ let
             (builtins.toJSON composition.connectInfo)
             (builtins.toJSON composition.internalIps)
             (builtins.toJSON (mapAttrs (n: v: "${v}") composition.nodes'))
+            (builtins.toJSON orderedNodes)
             (builtins.toJSON composition.containerNames)
             composition.name
             composition.clusterHash
@@ -156,6 +162,8 @@ let
     {
       nodes,
       name ? "composition",
+      autoStart ? true,
+      nodeConfig ? { },
     }:
     let
       # Helpers used during evaluation
@@ -289,6 +297,29 @@ let
               default = "10.233.1.254";
               description = "The IP address for the host bridge interface.";
             };
+            autoStart = mkOption {
+              type = types.bool;
+              default = true;
+              description = "Whether to automatically start containers in this cluster on boot.";
+            };
+            nodes = mkOption {
+              type = types.attrsOf (types.submodule {
+                options = {
+                  autoStart = mkOption {
+                    type = types.nullOr types.bool;
+                    default = null;
+                    description = "Override the cluster-wide autoStart for this node.";
+                  };
+                  order = mkOption {
+                    type = types.int;
+                    default = 1000;
+                    description = "Order in which this node starts (lower is earlier).";
+                  };
+                };
+              });
+              default = { };
+              description = "Per-node configuration for this cluster.";
+            };
             extraModules = mkOption {
               type = types.listOf types.unspecified;
               default = [ ];
@@ -311,7 +342,11 @@ let
                 name = containerNames.${nodeName};
                 value = {
                   path = toplevel;
-                  autoStart = true;
+                  autoStart =
+                    let
+                      nodeAutoStart = if cfg.nodes ? ${nodeName} then cfg.nodes.${nodeName}.autoStart else null;
+                    in
+                    if nodeAutoStart != null then nodeAutoStart else cfg.autoStart;
                   privateNetwork = true;
                   hostBridge = bridgeName;
                 };
@@ -347,6 +382,7 @@ let
               internalIps
               containerNames
               clusterHash
+              nodeConfig
               ;
           };
 
