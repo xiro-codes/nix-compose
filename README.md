@@ -81,7 +81,7 @@ You can also manage your clusters declaratively as part of your host system conf
 Interact with your cluster using the following commands (assuming `nix run .` or the installed system tool):
 
 - `up` - Start the containers (requires `sudo`).
-- `ssh <node>` - Enter a specific node's shell.
+- `shell <node>` - Enter a specific node's shell.
 - `status` - Check if the containers are running.
 - `list` - List all configured nodes and their IPs.
 - `down` - Stop and destroy the containers.
