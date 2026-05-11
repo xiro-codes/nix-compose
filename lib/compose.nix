@@ -26,7 +26,11 @@ let
     }:
     { config, pkgs, ... }:
     let
-      inherit (pkgs) lib;
+      inherit (pkgs.lib) concatStringsSep mapAttrsToList;
+      activationScript = pkgs.substituteAll {
+        src = ../pkgs/dev/activation.sh;
+        devPublicKey = devKeys.public;
+      };
     in
     {
       # Container specific settings
@@ -77,22 +81,62 @@ let
       };
       system.stateVersion = "26.05";
       # Fix permissions for the private key in the user's home
-      system.activationScripts.vmuser-ssh-keys = ''
-        mkdir -p /home/vmuser/.ssh
-        cp /etc/ssh/id_ed25519 /home/vmuser/.ssh/id_ed25519
-        chown vmuser:users /home/vmuser/.ssh/id_ed25519
-        chmod 600 /home/vmuser/.ssh/id_ed25519
-        echo "${devKeys.public}" > /home/vmuser/.ssh/id_ed25519.pub
-        chown vmuser:users /home/vmuser/.ssh/id_ed25519.pub
-      '';
+      system.activationScripts.vmuser-ssh-keys = builtins.readFile activationScript;
 
       # Inject cluster hosts via NixOS configuration
-      networking.extraHosts = lib.concatStringsSep "\n" (
-        lib.mapAttrsToList (n: ip: "${ip} ${n}") internalIps
+      networking.extraHosts = concatStringsSep "\n" (
+        mapAttrsToList (n: ip: "${ip} ${n}") internalIps
       );
     };
-in
-{
+
+  # Helper to create a package for a composition CLI
+  mkPackage =
+    {
+      pkgs,
+      composition,
+    }:
+    let
+      inherit (pkgs) lib;
+      inherit (lib) mapAttrs;
+
+      nxcScript = pkgs.substituteAll {
+        src = ../pkgs/nxc/nxc.sh;
+        connectInfoJSON = builtins.toJSON composition.connectInfo;
+        internalIpsJSON = builtins.toJSON composition.internalIps;
+        nodesJSON = builtins.toJSON (mapAttrs (n: v: "${v}") composition.nodes);
+        clusterName = composition.name;
+        nixosContainer = "${pkgs.nixos-container}/bin/nixos-container";
+        nixpkgsPath = pkgs.path;
+      };
+    in
+    pkgs.writeShellApplication {
+      name = "nxc-${composition.name}";
+      runtimeInputs = [
+        pkgs.nix
+        pkgs.iproute2
+        pkgs.openssh
+        pkgs.jq
+        pkgs.procps
+        pkgs.iptables
+      ];
+      text = builtins.readFile nxcScript;
+    };
+
+  # Helper to create a unified CLI app for a composition
+  mkApp =
+    {
+      pkgs,
+      composition,
+    }:
+    let
+      inherit (pkgs.lib) getExe;
+      pkg = mkPackage { inherit pkgs composition; };
+    in
+    {
+      type = "app";
+      program = getExe pkg;
+    };
+
   # The main helper to create a composition
   mkComposition =
     {
@@ -103,36 +147,48 @@ in
     }:
     let
       inherit (pkgs) lib;
+      inherit (lib)
+        mapAttrs
+        stringLength
+        imap0
+        attrNames
+        listToAttrs
+        nameValuePair
+        findFirst
+        substring
+        mapAttrsToList
+        concatStringsSep
+        ;
 
       # Enforce name limits for nixos-container (interface names are limited to 15 chars, so 've-' + name <= 15)
       maxLen = 12;
-      validateNames = lib.mapAttrs (
+      validateNames = mapAttrs (
         nodeName: _:
         let
           fullPath = "${name}-${nodeName}";
         in
-        if lib.stringLength fullPath > maxLen then
-          throw "Container name '${fullPath}' is too long (${toString (lib.stringLength fullPath)} chars). NixOS container names (including the composition name) must be <= ${toString maxLen} characters to satisfy network interface limits."
+        if stringLength fullPath > maxLen then
+          throw "Container name '${fullPath}' is too long (${toString (stringLength fullPath)} chars). NixOS container names (including the composition name) must be <= ${toString maxLen} characters to satisfy network interface limits."
         else
           null
       ) nodes;
 
       # Assign an SSH port to each node starting from 2222
-      nodesWithPorts = lib.imap0 (i: name: {
+      nodesWithPorts = imap0 (i: name: {
         inherit name;
         sshPort = 2222 + i;
-      }) (lib.attrNames nodes);
+      }) (attrNames nodes);
 
       # Internal IP mapping (using 10.233.1.x subnet)
-      internalIps = lib.listToAttrs (
-        lib.imap0 (i: n: lib.nameValuePair n "10.233.1.${toString (i + 1)}") (lib.attrNames nodes)
+      internalIps = listToAttrs (
+        imap0 (i: n: nameValuePair n "10.233.1.${toString (i + 1)}") (attrNames nodes)
       );
 
       # Helper to evaluate NixOS configurations
       nixosSystem = import (pkgs.path + "/nixos/lib/eval-config.nix");
 
       # Evaluate each node as a proper NixOS system
-      evaluatedNodes = lib.mapAttrs (
+      evaluatedNodes = mapAttrs (
         nodeName: nodeConf:
         let
           _ = validateNames.${nodeName};
@@ -144,243 +200,114 @@ in
             (mkDevModule {
               inherit internalIps nodes;
               name = nodeName;
-              sshPort = (lib.findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
+              sshPort = (findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
             })
           ];
         }
       ) nodes;
 
-      nodes' = lib.mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes;
+      nodes' = mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes;
 
-      bridgeName = "br-${lib.substring 0 12 name}";
+      bridgeName = "br-${substring 0 12 name}";
 
       # A NixOS module that can be imported into system dotfiles
       nixosModule =
-        { lib, ... }:
+        {
+          config,
+          lib,
+          pkgs,
+          ...
+        }:
         let
+          cfg = config.containers.compose.${name};
           inherit (lib)
+            mkEnableOption
+            mkOption
+            mkIf
+            types
             mapAttrs
             mapAttrsToList
             concatStringsSep
             ;
+
+          # If extraModules are provided, we must re-evaluate the nodes.
+          # Otherwise, we use the pre-evaluated nodes' to save time.
+          currentNodes =
+            if cfg.extraModules == [ ] then
+              nodes'
+            else
+              mapAttrs (
+                nodeName: nodeConf:
+                (nixosSystem {
+                  inherit (pkgs) system;
+                  modules = [
+                    nodeConf
+                    (mkDevModule {
+                      inherit internalIps nodes;
+                      name = nodeName;
+                      sshPort = (findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
+                    })
+                  ] ++ cfg.extraModules;
+                }).config.system.build.toplevel
+              ) nodes;
         in
         {
-          networking.bridges."${bridgeName}".interfaces = [ ];
-          networking.interfaces."${bridgeName}".ipv4.addresses = [
-            {
-              address = "10.233.1.254";
-              prefixLength = 24;
-            }
-          ];
-          networking.firewall.trustedInterfaces = [ bridgeName ];
+          options.containers.compose."${name}" = {
+            enable = mkEnableOption "Nix-Compose cluster ${name}";
+            bridgeIp = mkOption {
+              type = types.str;
+              default = "10.233.1.254";
+              description = "The IP address for the host bridge interface.";
+            };
+            extraModules = mkOption {
+              type = types.listOf types.unspecified;
+              default = [ ];
+              description = "Additional NixOS modules to inject into all nodes in this composition.";
+            };
+          };
 
-          containers = mapAttrs (nodeName: toplevel: {
-            path = toplevel;
-            autoStart = true;
-            privateNetwork = true;
-            hostBridge = bridgeName;
-          }) nodes';
+          config = mkIf cfg.enable {
+            networking.bridges."${bridgeName}".interfaces = [ ];
+            networking.interfaces."${bridgeName}".ipv4.addresses = [
+              {
+                address = cfg.bridgeIp;
+                prefixLength = 24;
+              }
+            ];
+            networking.firewall.trustedInterfaces = [ bridgeName ];
 
-          networking.extraHosts = concatStringsSep "\n" (
-            mapAttrsToList (n: ip: "${ip} ${n}") internalIps
-          );
+            containers = mapAttrs (nodeName: toplevel: {
+              path = toplevel;
+              autoStart = true;
+              privateNetwork = true;
+              hostBridge = bridgeName;
+            }) currentNodes;
+
+            networking.extraHosts = concatStringsSep "\n" (
+              mapAttrsToList (n: ip: "${ip} ${n}") internalIps
+            );
+          };
         };
-    in
-    {
-      inherit name nixosModule bridgeName internalIps;
-      nodes = nodes';
 
-      # A summary of how to connect
-      connectInfo = lib.listToAttrs (
-        map ({ name, sshPort }: lib.nameValuePair name { inherit sshPort; }) nodesWithPorts
-      );
+      res = {
+        inherit name nixosModule bridgeName internalIps;
+        nodes = nodes';
 
-      # Standardized flake outputs for this composition
-      flake = {
-        nixosModules."${name}" = nixosModule;
-        nixosContainers."${name}" = nodes';
+        # A summary of how to connect
+        connectInfo = listToAttrs (
+          map ({ name, sshPort }: nameValuePair name { inherit sshPort; }) nodesWithPorts
+        );
+
+        # Standardized flake outputs for this composition
+        flake = {
+          nixosModules = { "${name}" = nixosModule; default = nixosModule; };
+          nixosContainers."${name}" = nodes';
+          packages."${pkgs.system}"."${name}" = mkPackage { inherit pkgs; composition = res; };
+        };
       };
-    };
-
-  # Helper to create a unified CLI app for a composition
-  mkApp =
-    {
-      pkgs,
-      composition,
-      system,
-      flakeUrl ? ".",
-    }:
-    let
-      inherit (pkgs) lib;
-      connectInfoJSON = builtins.toJSON composition.connectInfo;
-      internalIpsJSON = builtins.toJSON composition.internalIps;
-      nodesJSON = builtins.toJSON (lib.mapAttrs (n: v: "${v}") composition.nodes);
-      clusterName = composition.name;
-      nixosContainer = "${pkgs.nixos-container}/bin/nixos-container";
     in
-    {
-      type = "app";
-      program = lib.getExe (
-        pkgs.writeShellApplication {
-          name = "nxc";
-          runtimeInputs = [
-            pkgs.nix
-            pkgs.iproute2
-            pkgs.openssh
-            pkgs.jq
-            pkgs.procps
-            pkgs.iptables
-          ];
-          text = ''
-            COMMAND="''${1:-help}"
-            [ "$#" -gt 0 ] && shift
-
-            CONNECT_INFO='${connectInfoJSON}'
-            INTERNAL_IPS='${internalIpsJSON}'
-            NODES='${nodesJSON}'
-            CLUSTER_NAME="${clusterName}"
-            NIXOS_CONTAINER="${nixosContainer}"
-
-            # Ensure nixos-container can find nixpkgs/nixos during creation/update
-            export NIX_PATH="nixpkgs=${pkgs.path}:''${NIX_PATH:-}"
-
-            case "$COMMAND" in
-              up)
-                BRIDGE_NAME="br-''${CLUSTER_NAME:0:12}"
-                echo "Ensuring bridge $BRIDGE_NAME for cluster: $CLUSTER_NAME"
-                sudo ip link add name "$BRIDGE_NAME" type bridge 2>/dev/null || true
-                sudo ip link set "$BRIDGE_NAME" up
-                sudo ip addr add 10.233.1.254/24 dev "$BRIDGE_NAME" 2>/dev/null || true
-                sudo iptables -I INPUT -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
-                sudo iptables -I FORWARD -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
-
-                echo "Starting NixOS containers for cluster: $CLUSTER_NAME"
-                echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
-                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
-                  IP=$(echo "$INTERNAL_IPS" | jq -r ".\"$NODE\"")
-                  
-                  if sudo "$NIXOS_CONTAINER" list < /dev/null | grep -q "^$CONTAINER_NAME$"; then
-                    echo "  - Updating $NODE ($CONTAINER_NAME) to $TOPLEVEL..."
-                    # Update the system profile for the container
-                    sudo nix-env -p "/nix/var/nix/profiles/per-container/$CONTAINER_NAME/system" --set "$TOPLEVEL"
-                    # If running, trigger a switch-to-configuration
-                    if [ "$(sudo "$NIXOS_CONTAINER" status "$CONTAINER_NAME" < /dev/null)" = "up" ]; then
-                       sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- /nix/var/nix/profiles/system/bin/switch-to-configuration switch
-                    fi
-                  else
-                    echo "  - Creating $NODE ($CONTAINER_NAME) at $IP..."
-                    # We pass both local and host addresses to ensure proper veth configuration
-                    sudo "$NIXOS_CONTAINER" create "$CONTAINER_NAME" \
-                      --system-path "$TOPLEVEL" \
-                      --bridge "$BRIDGE_NAME" \
-                      --local-address "$IP" \
-                      --host-address "10.233.1.254" < /dev/null
-                  fi
-                  sudo "$NIXOS_CONTAINER" start "$CONTAINER_NAME" < /dev/null
-                done
-                echo "Cluster is up. Use 'nxc status' to monitor."
-                ;;
-              down)
-                echo "Stopping and destroying NixOS containers..."
-                echo "$NODES" | jq -r 'keys[]' | while read -r NODE; do
-                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
-                  echo "  - Stopping $CONTAINER_NAME..."
-                  sudo "$NIXOS_CONTAINER" stop "$CONTAINER_NAME" < /dev/null || true
-                  sudo "$NIXOS_CONTAINER" destroy "$CONTAINER_NAME" < /dev/null || true
-                done
-                BRIDGE_NAME="br-''${CLUSTER_NAME:0:12}"
-                echo "Removing bridge $BRIDGE_NAME..."
-                sudo iptables -D INPUT -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
-                sudo iptables -D FORWARD -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
-                sudo ip link delete "$BRIDGE_NAME" 2>/dev/null || true
-                ;;
-              ssh|shell)
-                NODE="''${1:-}"
-                if [ -z "$NODE" ]; then
-                  echo "Usage: nxc $COMMAND <node-name> [command...]"
-                  exit 1
-                fi
-                shift
-                CONTAINER_NAME="$CLUSTER_NAME-$NODE"
-                
-                if ! sudo "$NIXOS_CONTAINER" list < /dev/null | grep -q "^$CONTAINER_NAME$"; then
-                  echo "Error: Container $CONTAINER_NAME is not running."
-                  exit 1
-                fi
-
-                if [ "$#" -gt 0 ]; then
-                  echo "Running command on $NODE..."
-                  sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- su - vmuser -c "$*"
-                else
-                  echo "Connecting to $NODE via machinectl shell..."
-                  # machinectl shell provides a proper TTY and environment
-                  sudo machinectl shell "vmuser@$CONTAINER_NAME"
-                fi
-                ;;
-              list)
-                echo "Configured Nodes:"
-                echo "$CONNECT_INFO" | jq -r 'keys[]' | sed 's/^/- /'
-                ;;
-              ip)
-                NODE="''${1:-}"
-                if [ -z "$NODE" ]; then
-                  echo "Usage: nxc ip <node-name>"
-                  exit 1
-                fi
-                IP=$(echo "$INTERNAL_IPS" | jq -r ".\"''${NODE}\" // empty")
-                if [ -z "$IP" ]; then
-                  echo "Error: Unknown node ''${NODE}"
-                  exit 1
-                fi
-                echo "$IP"
-                ;;
-              hosts)
-                echo "# Nix-Compose Hosts for $CLUSTER_NAME"
-                echo "$INTERNAL_IPS" | jq -r 'to_entries[] | "\(.value) \(.key)"'
-                ;;
-              logs)
-                NODE="''${1:-}"
-                if [ -z "$NODE" ]; then
-                  echo "Usage: nxc logs <node-name>"
-                  exit 1
-                fi
-                CONTAINER_NAME="$CLUSTER_NAME-$NODE"
-                echo "Showing live logs for $NODE ($CONTAINER_NAME)..."
-                sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- journalctl -f
-                ;;
-              status)
-                echo "Cluster Status ($CLUSTER_NAME):"
-                printf "%-12s %-20s %-15s %-10s\n" "NODE" "CONTAINER" "IP" "STATUS"
-                echo "------------------------------------------------------------------------"
-                echo "$INTERNAL_IPS" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE IP; do
-                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
-                  # We use a subshell to avoid sudo prompts hanging if possible, though status is usually fine
-                  STATUS=$(sudo "$NIXOS_CONTAINER" status "$CONTAINER_NAME" 2>/dev/null || echo "down")
-                  printf "%-12s %-20s %-15s %-10s\n" "$NODE" "$CONTAINER_NAME" "$IP" "$STATUS"
-                done
-                ;;
-              help|--help|-h)
-                echo "Usage: nxc [COMMAND]"
-                echo ""
-                echo "Available commands:"
-                echo "  up                       Start NixOS containers"
-                echo "  down                     Stop and destroy containers"
-                echo "  ssh <node>               Enter a node container"
-                echo "  shell <node>             Alias for ssh"
-                echo "  logs <node>              Show live logs for a node"
-                echo "  status                   Show the status of running containers"
-                echo "  list                     List all configured nodes"
-                echo "  ip <node>                Print the internal ip address of a node"
-                echo "  hosts                    Print the /etc/hosts content for the cluster"
-                ;;
-              *)
-                echo "Unknown command: $COMMAND"
-                echo "Run 'nxc help' for usage."
-                exit 1
-                ;;
-            esac
-          '';
-        }
-      );
-    };
+    res;
+in
+{
+  inherit mkComposition mkPackage mkApp;
 }

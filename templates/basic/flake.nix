@@ -86,10 +86,6 @@
       flake = {
         # Export schemas so 'nix flake show' recognizes our custom outputs
         inherit (nix-compose) schemas;
-
-        # Collect per-system compositions into top-level outputs for 'nix flake show'
-        nixosContainers = nixpkgs.lib.mapAttrs (system: s: s.composition.flake.nixosContainers) self.legacyPackages;
-        nixosModules = nixpkgs.lib.mapAttrs (system: s: s.composition.flake.nixosModules) self.legacyPackages;
-      };
+      } // composition.flake;
     };
 }
