@@ -160,6 +160,46 @@ in
       );
 
       inherit internalIps;
+
+      bridgeName = "br-${lib.substring 0 12 name}";
+
+      # A NixOS module that can be imported into system dotfiles
+      nixosModule =
+        { lib, ... }:
+        let
+          inherit (lib)
+            mapAttrs
+            mapAttrsToList
+            concatStringsSep
+            ;
+        in
+        {
+          networking.bridges."${bridgeName}".interfaces = [ ];
+          networking.interfaces."${bridgeName}".ipv4.addresses = [
+            {
+              address = "10.233.1.254";
+              prefixLength = 24;
+            }
+          ];
+          networking.firewall.trustedInterfaces = [ bridgeName ];
+
+          containers = mapAttrs (nodeName: toplevel: {
+            path = toplevel;
+            autoStart = true;
+            privateNetwork = true;
+            hostBridge = bridgeName;
+          }) (mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes);
+
+          networking.extraHosts = concatStringsSep "\n" (
+            mapAttrsToList (n: ip: "${ip} ${n}") internalIps
+          );
+        };
+
+      # Standardized flake outputs for this composition
+      flake = {
+        nixosModules."${name}" = nixosModule;
+        nixosContainers."${name}" = nodes;
+      };
     };
 
   # Helper to create a unified CLI app for a composition

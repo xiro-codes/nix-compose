@@ -28,6 +28,22 @@
             }) (import ./lib/compose.nix);
           };
         };
+        nixosContainer = {
+          version = 1;
+          doc = "NixOS containers defined by nix-compose";
+          inventory = self: {
+            children = builtins.mapAttrs (system: clusters: {
+              what = "system";
+              children = builtins.mapAttrs (clusterName: cluster: {
+                what = "NixOS Container Cluster";
+                children = builtins.mapAttrs (nodeName: node: {
+                  what = "NixOS Container Node";
+                  derivation = node;
+                }) cluster;
+              }) clusters;
+            }) (self.nixosContainer or { });
+          };
+        };
       };
 
       # Top-level library and templates
