@@ -15,10 +15,34 @@
       nix-compose,
       ...
     }:
+    let
+      # Define your cluster composition at the top level
+      cluster = nix-compose.lib.mkCompose {
+        name = "nxc-basic";
+        nodes = {
+          server =
+            { ... }:
+            {
+              services.nginx = {
+                enable = true;
+                virtualHosts.default = {
+                  default = true;
+                  locations."/".return = "200 'Hello World'";
+                };
+              };
+              networking.firewall.allowedTCPPorts = [ 80 ];
+            };
+          client =
+            { pkgs, ... }:
+            {
+              environment.systemPackages = [ pkgs.curl ];
+            };
+        };
+      };
+    in
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "x86_64-linux"
-        "aarch64-linux"
       ];
 
       perSystem =
@@ -28,45 +52,15 @@
           ...
         }:
         let
-          # Define your cluster nodes here
-          composition = nix-compose.lib.mkComposition {
-            inherit pkgs;
-            name = "cl";
-            nodes = {
-              srv =
-                { ... }:
-                {
-                  services.nginx = {
-                    enable = true;
-                    virtualHosts.default = {
-                      default = true;
-                      locations."/".return = "200 'Hello World'";
-                    };
-                  };
-                  networking.firewall.allowedTCPPorts = [ 80 ];
-                };
-              clt =
-                { pkgs, ... }:
-                {
-                  environment.systemPackages = [ pkgs.curl ];
-                };
-            };
-          };
+          # Evaluate the composition for the current system
+          comp = cluster.perSystem pkgs;
         in
         {
           # Export the 'nxc' CLI app
-          apps.default = nix-compose.lib.mkApp {
-            inherit pkgs system;
-            inherit composition;
-          };
+          apps.default = comp.apps."${cluster.name}";
 
           # Export individual VM packages for building
-          packages = {
-            default = composition.nodes.srv;
-          } // composition.nodes;
-
-          # Store the composition in legacyPackages so we can extract it for top-level outputs
-          legacyPackages.composition = composition;
+          packages = comp.packages // comp.nodes';
 
           devShells.default = pkgs.mkShellNoCC {
             packages = [ pkgs.just ];
@@ -76,16 +70,13 @@
               echo "Available commands:"
               echo "  nix run . up          - Start the containers (requires sudo)"
               echo "  nix run . down        - Stop and destroy containers"
-              echo "  nix run . shell srv     - Enter the 'srv' container"
+              echo "  nix run . shell srv   - Enter the 'srv' container"
               echo "  nix run . status      - Show cluster status"
               echo "  just build            - Build all container toplevels"
             '';
           };
         };
 
-      flake = {
-        # Export schemas so 'nix flake show' recognizes our custom outputs
-        inherit (nix-compose) schemas;
-      } // composition.flake;
+      flake = nix-compose.schemas // cluster.flake
     };
 }

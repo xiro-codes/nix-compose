@@ -137,80 +137,92 @@ let
       program = getExe pkg;
     };
 
-  # The main helper to create a composition
-  mkComposition =
+  # The main helper to create a composition (system-agnostic)
+  mkCompose =
     {
-      pkgs,
       nodes,
       name ? "composition",
-      testScript ? "start_all()",
     }:
     let
-      inherit (pkgs) lib;
-      inherit (lib)
-        mapAttrs
-        stringLength
-        imap0
-        attrNames
-        listToAttrs
-        nameValuePair
-        findFirst
-        substring
-        mapAttrsToList
-        concatStringsSep
-        ;
+      # Helpers used during evaluation
+      nixosSystem = pkgs: import (pkgs.path + "/nixos/lib/eval-config.nix");
 
-      # Enforce name limits for nixos-container (interface names are limited to 15 chars, so 've-' + name <= 15)
-      maxLen = 12;
-      validateNames = mapAttrs (
-        nodeName: _:
+      bridgeName = "br-${builtins.substring 0 12 name}";
+
+      # Internal helper to evaluate nodes for a specific pkgs
+      evaluate =
+        pkgs:
         let
-          fullPath = "${name}-${nodeName}";
+          inherit (pkgs) lib;
+          inherit (lib)
+            mapAttrs
+            stringLength
+            imap0
+            attrNames
+            listToAttrs
+            nameValuePair
+            findFirst
+            ;
+
+          # Enforce name limits for nixos-container (interface names are limited to 15 chars, so 've-' + name <= 15)
+          maxLen = 12;
+          validateNames = mapAttrs (
+            nodeName: _:
+            let
+              fullPath = "${name}-${nodeName}";
+            in
+            if stringLength fullPath > maxLen then
+              throw "Container name '${fullPath}' is too long (${toString (stringLength fullPath)} chars). NixOS container names (including the composition name) must be <= ${toString maxLen} characters to satisfy network interface limits."
+            else
+              null
+          ) nodes;
+
+          # Assign an SSH port to each node starting from 2222
+          nodesWithPorts = imap0 (i: name: {
+            inherit name;
+            sshPort = 2222 + i;
+          }) (attrNames nodes);
+
+          # Internal IP mapping (using 10.233.1.x subnet)
+          internalIps = listToAttrs (
+            imap0 (i: n: nameValuePair n "10.233.1.${toString (i + 1)}") (attrNames nodes)
+          );
+
+          # Evaluate each node as a proper NixOS system
+          evaluatedNodes = mapAttrs (
+            nodeName: nodeConf:
+            let
+              _ = validateNames.${nodeName};
+            in
+            (nixosSystem pkgs) {
+              inherit (pkgs) system;
+              modules = [
+                nodeConf
+                (mkDevModule {
+                  inherit internalIps nodes;
+                  name = nodeName;
+                  sshPort = (findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
+                })
+              ];
+            }
+          ) nodes;
+
+          nodes' = mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes;
+
+          connectInfo = listToAttrs (
+            map ({ name, sshPort }: nameValuePair name { inherit sshPort; }) nodesWithPorts
+          );
         in
-        if stringLength fullPath > maxLen then
-          throw "Container name '${fullPath}' is too long (${toString (stringLength fullPath)} chars). NixOS container names (including the composition name) must be <= ${toString maxLen} characters to satisfy network interface limits."
-        else
-          null
-      ) nodes;
+        {
+          inherit
+            nodes'
+            connectInfo
+            internalIps
+            nodesWithPorts
+            ;
+        };
 
-      # Assign an SSH port to each node starting from 2222
-      nodesWithPorts = imap0 (i: name: {
-        inherit name;
-        sshPort = 2222 + i;
-      }) (attrNames nodes);
-
-      # Internal IP mapping (using 10.233.1.x subnet)
-      internalIps = listToAttrs (
-        imap0 (i: n: nameValuePair n "10.233.1.${toString (i + 1)}") (attrNames nodes)
-      );
-
-      # Helper to evaluate NixOS configurations
-      nixosSystem = import (pkgs.path + "/nixos/lib/eval-config.nix");
-
-      # Evaluate each node as a proper NixOS system
-      evaluatedNodes = mapAttrs (
-        nodeName: nodeConf:
-        let
-          _ = validateNames.${nodeName};
-        in
-        nixosSystem {
-          inherit (pkgs) system;
-          modules = [
-            nodeConf
-            (mkDevModule {
-              inherit internalIps nodes;
-              name = nodeName;
-              sshPort = (findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
-            })
-          ];
-        }
-      ) nodes;
-
-      nodes' = mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes;
-
-      bridgeName = "br-${substring 0 12 name}";
-
-      # A NixOS module that can be imported into system dotfiles
+      # The NixOS module that can be imported into system dotfiles
       nixosModule =
         {
           config,
@@ -219,7 +231,7 @@ let
           ...
         }:
         let
-          cfg = config.containers.compose.${name};
+          cfg = config.containers.compose."${name}";
           inherit (lib)
             mkEnableOption
             mkOption
@@ -230,22 +242,25 @@ let
             concatStringsSep
             ;
 
+          # Evaluate nodes lazily based on host pkgs
+          evalResult = evaluate pkgs;
+          inherit (evalResult) internalIps nodes';
+
           # If extraModules are provided, we must re-evaluate the nodes.
-          # Otherwise, we use the pre-evaluated nodes' to save time.
           currentNodes =
             if cfg.extraModules == [ ] then
               nodes'
             else
               mapAttrs (
                 nodeName: nodeConf:
-                (nixosSystem {
+                ((nixosSystem pkgs) {
                   inherit (pkgs) system;
                   modules = [
                     nodeConf
                     (mkDevModule {
                       inherit internalIps nodes;
                       name = nodeName;
-                      sshPort = (findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
+                      sshPort = (lib.findFirst (n: n.name == nodeName) { } evalResult.nodesWithPorts).sshPort or 2222;
                     })
                   ] ++ cfg.extraModules;
                 }).config.system.build.toplevel
@@ -288,26 +303,42 @@ let
             );
           };
         };
-
-      res = {
-        inherit name nixosModule bridgeName internalIps;
-        nodes = nodes';
-
-        # A summary of how to connect
-        connectInfo = listToAttrs (
-          map ({ name, sshPort }: nameValuePair name { inherit sshPort; }) nodesWithPorts
-        );
-
-        # Standardized flake outputs for this composition
-        flake = {
-          nixosModules = { "${name}" = nixosModule; default = nixosModule; };
-          nixosContainers."${name}" = nodes';
-          packages."${pkgs.system}"."${name}" = mkPackage { inherit pkgs; composition = res; };
-        };
-      };
     in
-    res;
+    rec {
+      inherit name nodes nixosModule;
+
+      # Function to get per-system outputs
+      perSystem =
+        pkgs:
+        let
+          evalResult = evaluate pkgs;
+          inherit (evalResult) nodes' connectInfo internalIps;
+
+          composition = {
+            inherit name nodes' connectInfo internalIps;
+          };
+
+          pkg = mkPackage { inherit pkgs composition; };
+          app = mkApp { inherit pkgs composition; };
+        in
+        {
+          inherit nodes' composition;
+          packages."${name}" = pkg;
+          apps."${name}" = app;
+        };
+
+      # Standardized flake outputs (some are system-agnostic)
+      flake = {
+        nixosModules."${name}" = nixosModule;
+      };
+    };
 in
 {
-  inherit mkComposition mkPackage mkApp;
+  inherit
+    mkCompose
+    mkPackage
+    mkApp
+    ;
+  # Compatibility alias
+  mkComposition = mkCompose;
 }
