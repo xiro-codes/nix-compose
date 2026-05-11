@@ -99,11 +99,12 @@ let
       inherit (pkgs) lib;
       inherit (lib) mapAttrs attrNames sort;
 
-      evalResult = composition.perSystem pkgs;
+      # Support both top-level composition objects and pre-evaluated data objects
+      evalData = if composition ? perSystem then (composition.perSystem pkgs).composition else composition;
 
       orderedNodes = sort (a: b:
-        (composition.nodeConfig.${a}.order or 1000) < (composition.nodeConfig.${b}.order or 1000)
-      ) (attrNames evalResult.composition.nodes');
+        (evalData.nodeConfig.${a}.order or 1000) < (evalData.nodeConfig.${b}.order or 1000)
+      ) (attrNames evalData.nodes');
 
       nxcScript = pkgs.writeText "nxc.py" (
         builtins.replaceStrings
@@ -120,14 +121,14 @@ let
             "@nixpkgsPath@"
           ]
           [
-            (builtins.toJSON evalResult.composition.connectInfo)
-            (builtins.toJSON evalResult.composition.internalIps)
-            (builtins.toJSON (mapAttrs (n: v: "${v}") evalResult.composition.nodes'))
+            (builtins.toJSON evalData.connectInfo)
+            (builtins.toJSON evalData.internalIps)
+            (builtins.toJSON (mapAttrs (n: v: "${v}") evalData.nodes'))
             (builtins.toJSON orderedNodes)
-            (builtins.toJSON evalResult.composition.containerNames)
-            evalResult.composition.name
-            evalResult.composition.clusterHash
-            evalResult.composition.bridgeIp
+            (builtins.toJSON evalData.containerNames)
+            evalData.name
+            evalData.clusterHash
+            evalData.bridgeIp
             "${pkgs.nixos-container}/bin/nixos-container"
             "${pkgs.path}"
           ]
@@ -135,7 +136,7 @@ let
       );
     in
     pkgs.writeShellApplication {
-      name = "nxc-${composition.name}";
+      name = "nxc-${evalData.name}";
       runtimeInputs = [
         pkgs.python3
         pkgs.nix
@@ -156,7 +157,7 @@ let
     }:
     let
       inherit (pkgs.lib) getExe;
-      pkg = mkPackage { inherit pkgs composition; };
+      pkg = mkPackage { inherit pkgs; composition = composition; };
     in
     {
       type = "app";
@@ -172,6 +173,7 @@ let
       nodeConfig ? { },
       subnet ? "10.233.1",
       bridgeIp ? "${subnet}.254",
+      extraModules ? [ ],
     }:
     let
       # Helpers used during evaluation
@@ -247,16 +249,9 @@ let
             ;
         };
 
-      # The NixOS module that can be imported into system dotfiles
-      nixosModule =
-        {
-          config,
-          lib,
-          pkgs,
-          ...
-        }:
+      nixosModule' =
+        { config, lib, pkgs, ... }:
         let
-          cfg = config.nxc.compose."${name}";
           inherit (lib)
             mkEnableOption
             mkOption
@@ -267,36 +262,10 @@ let
             concatStringsSep
             listToAttrs
             ;
-
-          # Evaluate nodes lazily based on host pkgs
+          cfg = config.nxc.compose."${name}";
           evalResult = evaluate pkgs;
-          inherit (evalResult)
-            internalIps
-            nodes'
-            containerNames
-            ;
-
-          # If extraModules are provided, we must re-evaluate the nodes.
-          currentNodes =
-            if cfg.extraModules == [ ] then
-              nodes'
-            else
-              mapAttrs (
-                nodeName: nodeConf:
-                ((nixosSystem pkgs) {
-                  inherit (pkgs) system;
-                  modules = [
-                    nodeConf
-                    (mkDevModule {
-                      inherit internalIps nodes;
-                      bridgeIp = cfg.bridgeIp;
-                      name = nodeName;
-                      sshPort = (lib.findFirst (n: n.name == nodeName) { } evalResult.nodesWithPorts).sshPort or 2222;
-                    })
-                  ]
-                  ++ cfg.extraModules;
-                }).config.system.build.toplevel
-              ) nodes;
+          currentNodes = evalResult.nodes';
+          inherit (evalResult) internalIps containerNames;
         in
         {
           options.nxc.compose."${name}" = {
@@ -365,14 +334,17 @@ let
             networking.extraHosts = concatStringsSep "\n" (
               mapAttrsToList (n: ip: "${ip} ${n} ${n}.${name} ${containerNames.${n}}") internalIps
             );
+
+            environment.systemPackages = [
+              (mkPackage {
+                inherit pkgs;
+                composition = topLevelComposition;
+              })
+            ];
           };
         };
-    in
-    rec {
-      inherit name nodes nixosModule;
 
-      # Function to get per-system outputs
-      perSystem =
+      perSystem' =
         pkgs:
         let
           evalResult = evaluate pkgs;
@@ -396,8 +368,8 @@ let
               ;
           };
 
-          pkg = mkPackage { inherit pkgs composition; };
-          app = mkApp { inherit pkgs composition; };
+          pkg = mkPackage { inherit pkgs; composition = composition; };
+          app = mkApp { inherit pkgs; composition = composition; };
         in
         {
           inherit nodes' composition;
@@ -405,14 +377,19 @@ let
           apps."${name}" = app;
         };
 
-      # Standardized flake outputs (some are system-agnostic)
-      flake = {
-        nixosModules = {
-          "${name}" = nixosModule;
-          default = nixosModule;
+      topLevelComposition = {
+        inherit name nodes;
+        nixosModule = nixosModule';
+        perSystem = perSystem';
+        flake = {
+          nixosModules = {
+            "${name}" = nixosModule';
+            default = nixosModule';
+          };
         };
       };
-    };
+    in
+    topLevelComposition;
 in
 {
   inherit
