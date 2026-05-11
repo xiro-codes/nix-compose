@@ -23,9 +23,6 @@
 
       perSystem =
         {
-          config,
-          self',
-          inputs',
           pkgs,
           system,
           ...
@@ -57,8 +54,6 @@
           };
         in
         {
-          inherit (composition.flake) nixosContainers nixosModules;
-
           # Export the 'nxc' CLI app
           apps.default = nix-compose.lib.mkApp {
             inherit pkgs system;
@@ -69,6 +64,9 @@
           packages = {
             default = composition.nodes.srv;
           } // composition.nodes;
+
+          # Store the composition in legacyPackages so we can extract it for top-level outputs
+          legacyPackages.composition = composition;
 
           devShells.default = pkgs.mkShellNoCC {
             packages = [ pkgs.just ];
@@ -84,5 +82,14 @@
             '';
           };
         };
+
+      flake = {
+        # Export schemas so 'nix flake show' recognizes our custom outputs
+        inherit (nix-compose) schemas;
+
+        # Collect per-system compositions into top-level outputs for 'nix flake show'
+        nixosContainers = nixpkgs.lib.mapAttrs (system: s: s.composition.flake.nixosContainers) self.legacyPackages;
+        nixosModules = nixpkgs.lib.mapAttrs (system: s: s.composition.flake.nixosModules) self.legacyPackages;
+      };
     };
 }

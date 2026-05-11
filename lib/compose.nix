@@ -149,17 +149,8 @@ in
           ];
         }
       ) nodes;
-    in
-    {
-      inherit name;
-      nodes = lib.mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes;
 
-      # A summary of how to connect
-      connectInfo = lib.listToAttrs (
-        map ({ name, sshPort }: lib.nameValuePair name { inherit sshPort; }) nodesWithPorts
-      );
-
-      inherit internalIps;
+      nodes' = lib.mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes;
 
       bridgeName = "br-${lib.substring 0 12 name}";
 
@@ -188,17 +179,26 @@ in
             autoStart = true;
             privateNetwork = true;
             hostBridge = bridgeName;
-          }) (mapAttrs (_: node: node.config.system.build.toplevel) evaluatedNodes);
+          }) nodes';
 
           networking.extraHosts = concatStringsSep "\n" (
             mapAttrsToList (n: ip: "${ip} ${n}") internalIps
           );
         };
+    in
+    {
+      inherit name nixosModule bridgeName internalIps;
+      nodes = nodes';
+
+      # A summary of how to connect
+      connectInfo = lib.listToAttrs (
+        map ({ name, sshPort }: lib.nameValuePair name { inherit sshPort; }) nodesWithPorts
+      );
 
       # Standardized flake outputs for this composition
       flake = {
         nixosModules."${name}" = nixosModule;
-        nixosContainers."${name}" = nodes;
+        nixosContainers."${name}" = nodes';
       };
     };
 
