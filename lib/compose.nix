@@ -28,7 +28,9 @@ let
     let
       inherit (pkgs.lib) concatStringsSep mapAttrsToList;
       activationScript = pkgs.writeText "activation.sh" (
-        builtins.replaceStrings [ "@devPublicKey@" ] [ devKeys.public ] (builtins.readFile ../pkgs/dev/activation.sh)
+        builtins.replaceStrings [ "@devPublicKey@" ] [ devKeys.public ] (
+          builtins.readFile ../pkgs/dev/activation.sh
+        )
       );
     in
     {
@@ -341,7 +343,10 @@ let
 
       # Standardized flake outputs (some are system-agnostic)
       flake = {
-        nixosModules."${name}" = nixosModule;
+        nixosModules = {
+          "${name}" = nixosModule;
+          default = nixosModule;
+        };
       };
     };
 in
