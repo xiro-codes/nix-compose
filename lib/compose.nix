@@ -103,7 +103,7 @@ let
         (composition.nodeConfig.${a}.order or 1000) < (composition.nodeConfig.${b}.order or 1000)
       ) (attrNames composition.nodes');
 
-      nxcScript = pkgs.writeText "nxc.sh" (
+      nxcScript = pkgs.writeText "nxc.py" (
         builtins.replaceStrings
           [
             "@connectInfoJSON@"
@@ -129,12 +129,13 @@ let
             "${pkgs.nixos-container}/bin/nixos-container"
             "${pkgs.path}"
           ]
-          (builtins.readFile ../pkgs/nxc/nxc.sh)
+          (builtins.readFile ../pkgs/nxc/nxc.py)
       );
     in
     pkgs.writeShellApplication {
       name = "nxc-${composition.name}";
       runtimeInputs = [
+        pkgs.python3
         pkgs.nix
         pkgs.iproute2
         pkgs.openssh
@@ -142,7 +143,7 @@ let
         pkgs.procps
         pkgs.iptables
       ];
-      text = builtins.readFile nxcScript;
+      text = "${pkgs.python3}/bin/python3 ${nxcScript} \"$@\"";
     };
 
   # Helper to create a unified CLI app for a composition

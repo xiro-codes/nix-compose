@@ -123,12 +123,18 @@ in
     in
     pkgs.runCommand "test-ordering" { buildInputs = [ pkgs.jq ]; } ''
       echo "Checking if node2 comes before node1 in the package's nxc script..."
-      SCRIPT_CONTENT=$(cat ${eval.packages.ordered-cluster}/bin/nxc-ordered-cluster)
-      ORDERED_NODES=$(echo "$SCRIPT_CONTENT" | grep "ORDERED_NODES=" | cut -d"'" -f2)
-      FIRST_NODE=$(echo "$ORDERED_NODES" | jq -r '.[0]')
+      # Find the actual Python script path from the shell wrapper
+      PY_SCRIPT=$(grep -o '/nix/store/[^ ]*-nxc.py' ${eval.packages.ordered-cluster}/bin/nxc-ordered-cluster)
+      SCRIPT_CONTENT=$(cat "$PY_SCRIPT")
+      
+      # Extract ORDERED_NODES from the script
+      # In Python it looks like: ORDERED_NODES = json.loads('["node2", "node1"]')
+      ORDERED_NODES_JSON=$(echo "$SCRIPT_CONTENT" | grep "ORDERED_NODES =" | cut -d"'" -f2)
+      FIRST_NODE=$(echo "$ORDERED_NODES_JSON" | jq -r '.[0]')
+      
       if [[ "$FIRST_NODE" != "node2" ]]; then
         echo "Error: Expected node2 first, found $FIRST_NODE"
-        echo "Ordered nodes: $ORDERED_NODES"
+        echo "Ordered nodes: $ORDERED_NODES_JSON"
         exit 1
       fi
       touch $out
@@ -205,8 +211,11 @@ in
       [[ "${nixosEval.config.nxc.compose.subnet-cluster.bridgeIp}" == "10.250.0.254" ]]
       
       echo "Checking bridge IP in CLI script..."
-      SCRIPT_CONTENT=$(cat ${eval.packages.subnet-cluster}/bin/nxc-subnet-cluster)
-      SCRIPT_BRIDGE_IP=$(echo "$SCRIPT_CONTENT" | grep "BRIDGE_IP=" | cut -d"\"" -f2)
+      PY_SCRIPT=$(grep -o '/nix/store/[^ ]*-nxc.py' ${eval.packages.subnet-cluster}/bin/nxc-subnet-cluster)
+      SCRIPT_CONTENT=$(cat "$PY_SCRIPT")
+      
+      # In Python: BRIDGE_IP = "10.250.0.254"
+      SCRIPT_BRIDGE_IP=$(echo "$SCRIPT_CONTENT" | grep "BRIDGE_IP =" | cut -d"\"" -f2)
       if [[ "$SCRIPT_BRIDGE_IP" != "10.250.0.254" ]]; then
         echo "Error: Expected 10.250.0.254, found $SCRIPT_BRIDGE_IP"
         exit 1
