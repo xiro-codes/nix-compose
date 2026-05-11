@@ -310,7 +310,14 @@ in
                 ;;
               status)
                 echo "Cluster Status ($CLUSTER_NAME):"
-                sudo "$NIXOS_CONTAINER" list | grep "$CLUSTER_NAME-" || echo "No containers running for this cluster."
+                printf "%-12s %-20s %-15s %-10s\n" "NODE" "CONTAINER" "IP" "STATUS"
+                echo "------------------------------------------------------------------------"
+                echo "$INTERNAL_IPS" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE IP; do
+                  CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+                  # We use a subshell to avoid sudo prompts hanging if possible, though status is usually fine
+                  STATUS=$(sudo "$NIXOS_CONTAINER" status "$CONTAINER_NAME" 2>/dev/null || echo "down")
+                  printf "%-12s %-20s %-15s %-10s\n" "$NODE" "$CONTAINER_NAME" "$IP" "$STATUS"
+                done
                 ;;
               help|--help|-h)
                 echo "Usage: nxc [COMMAND]"
