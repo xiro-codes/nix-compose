@@ -176,4 +176,42 @@ in
       
       touch $out
     '';
+
+  # Subnet and IP Configuration test
+  subnet =
+    let
+      c = lib-compose.mkCompose {
+        name = "subnet-cluster";
+        subnet = "10.250.0";
+        nodes = {
+          node1 = { ... }: { };
+        };
+      };
+      eval = c.perSystem pkgs;
+      nixosEval = import (pkgs.path + "/nixos/lib/eval-config.nix") {
+        inherit (pkgs) system;
+        modules = [
+          c.nixosModule
+          {
+            nxc.compose.subnet-cluster.enable = true;
+            fileSystems."/" = { device = "/dev/null"; };
+            boot.loader.grub.enable = false;
+          }
+        ];
+      };
+    in
+    pkgs.runCommand "test-subnet" { buildInputs = [ pkgs.jq ]; } ''
+      echo "Checking bridge IP in NixOS configuration..."
+      [[ "${nixosEval.config.nxc.compose.subnet-cluster.bridgeIp}" == "10.250.0.254" ]]
+      
+      echo "Checking bridge IP in CLI script..."
+      SCRIPT_CONTENT=$(cat ${eval.packages.subnet-cluster}/bin/nxc-subnet-cluster)
+      SCRIPT_BRIDGE_IP=$(echo "$SCRIPT_CONTENT" | grep "BRIDGE_IP=" | cut -d"\"" -f2)
+      if [[ "$SCRIPT_BRIDGE_IP" != "10.250.0.254" ]]; then
+        echo "Error: Expected 10.250.0.254, found $SCRIPT_BRIDGE_IP"
+        exit 1
+      fi
+      
+      touch $out
+    '';
 }

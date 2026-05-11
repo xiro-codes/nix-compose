@@ -23,6 +23,7 @@ let
       nodes,
       sshPort,
       internalIps,
+      bridgeIp,
     }:
     { config, pkgs, ... }:
     let
@@ -47,7 +48,7 @@ let
           prefixLength = 24;
         }
       ];
-      networking.defaultGateway = "10.233.1.254";
+      networking.defaultGateway = bridgeIp;
 
       # Allow all traffic on the internal interface for ease of use in the cluster
       networking.firewall.trustedInterfaces = [ "eth0" ];
@@ -112,6 +113,7 @@ let
             "@containerNamesJSON@"
             "@clusterName@"
             "@clusterHash@"
+            "@bridgeIp@"
             "@nixosContainer@"
             "@nixpkgsPath@"
           ]
@@ -123,6 +125,7 @@ let
             (builtins.toJSON composition.containerNames)
             composition.name
             composition.clusterHash
+            composition.bridgeIp
             "${pkgs.nixos-container}/bin/nixos-container"
             "${pkgs.path}"
           ]
@@ -164,6 +167,8 @@ let
       name ? "composition",
       autoStart ? true,
       nodeConfig ? { },
+      subnet ? "10.233.1",
+      bridgeIp ? "${subnet}.254",
     }:
     let
       # Helpers used during evaluation
@@ -203,9 +208,9 @@ let
             sshPort = 2222 + i;
           }) (attrNames nodes);
 
-          # Internal IP mapping (using 10.233.1.x subnet)
+          # Internal IP mapping (using configured subnet)
           internalIps = listToAttrs (
-            imap0 (i: n: nameValuePair n "10.233.1.${toString (i + 1)}") (attrNames nodes)
+            imap0 (i: n: nameValuePair n "${subnet}.${toString (i + 1)}") (attrNames nodes)
           );
 
           # Evaluate each node as a proper NixOS system
@@ -215,7 +220,7 @@ let
               modules = [
                 nodeConf
                 (mkDevModule {
-                  inherit internalIps nodes;
+                  inherit internalIps nodes bridgeIp;
                   name = nodeName;
                   sshPort = (findFirst (n: n.name == nodeName) { } nodesWithPorts).sshPort or 2222;
                 })
@@ -281,6 +286,7 @@ let
                     nodeConf
                     (mkDevModule {
                       inherit internalIps nodes;
+                      bridgeIp = cfg.bridgeIp;
                       name = nodeName;
                       sshPort = (lib.findFirst (n: n.name == nodeName) { } evalResult.nodesWithPorts).sshPort or 2222;
                     })
@@ -294,7 +300,7 @@ let
             enable = mkEnableOption "Nix-Compose cluster ${name}";
             bridgeIp = mkOption {
               type = types.str;
-              default = "10.233.1.254";
+              default = bridgeIp;
               description = "The IP address for the host bridge interface.";
             };
             autoStart = mkOption {
@@ -383,6 +389,7 @@ let
               containerNames
               clusterHash
               nodeConfig
+              bridgeIp
               ;
           };
 

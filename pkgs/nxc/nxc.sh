@@ -8,6 +8,7 @@ ORDERED_NODES='@orderedNodesJSON@'
 CONTAINER_NAMES='@containerNamesJSON@'
 CLUSTER_NAME="@clusterName@"
 CLUSTER_HASH="@clusterHash@"
+BRIDGE_IP="@bridgeIp@"
 NIXOS_CONTAINER="@nixosContainer@"
 
 # Ensure nixos-container can find nixpkgs/nixos during creation/update
@@ -17,9 +18,18 @@ case "$COMMAND" in
   up)
     BRIDGE_NAME="br-${CLUSTER_NAME:0:12}"
     echo "Ensuring bridge $BRIDGE_NAME for cluster: $CLUSTER_NAME"
+
+    # Conflict detection: check if bridge IP is already in use by another interface
+    EXISTING_IF=$(ip -4 addr show | grep -F "$BRIDGE_IP" | awk '{print $NF}' | head -n 1)
+    if [ -n "$EXISTING_IF" ] && [ "$EXISTING_IF" != "$BRIDGE_NAME" ]; then
+      echo "Error: Bridge IP $BRIDGE_IP is already in use by interface $EXISTING_IF"
+      echo "Please use a different subnet for this composition."
+      exit 1
+    fi
+
     sudo ip link add name "$BRIDGE_NAME" type bridge 2>/dev/null || true
     sudo ip link set "$BRIDGE_NAME" up
-    sudo ip addr add 10.233.1.254/24 dev "$BRIDGE_NAME" 2>/dev/null || true
+    sudo ip addr add "$BRIDGE_IP/24" dev "$BRIDGE_NAME" 2>/dev/null || true
     sudo iptables -I INPUT -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
     sudo iptables -I FORWARD -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
 
@@ -53,7 +63,7 @@ case "$COMMAND" in
           --system-path "$TOPLEVEL" \
           --bridge "$BRIDGE_NAME" \
           --local-address "$IP" \
-          --host-address "10.233.1.254" < /dev/null
+          --host-address "$BRIDGE_IP" < /dev/null
       fi
       sudo "$NIXOS_CONTAINER" start "$CONTAINER_NAME" < /dev/null
     done
