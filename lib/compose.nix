@@ -1,5 +1,6 @@
 let
-  # Internal helper to inject dev configuration into nodes
+  # Internal helper to inject dev configuration into nodes.
+  # This configures default networking, sets up the vmuser, and enables openssh
   mkDevModule =
     {
       name,
@@ -130,6 +131,9 @@ let
       # Helpers used during evaluation
       nixosSystem = pkgs: import (pkgs.path + "/nixos/lib/eval-config.nix");
 
+      # We use a short 4-character hash string here to ensure that interface and container names
+      # stay within Linux limits (e.g., veth interface name length limits), however this could potentially
+      # lead to hash collisions.
       clusterHash = builtins.substring 0 4 (builtins.hashString "sha256" name);
 
       bridgeName = "br-${builtins.substring 0 12 name}";
