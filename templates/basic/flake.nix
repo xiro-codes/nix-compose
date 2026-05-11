@@ -5,6 +5,7 @@
     nixpkgs.url = "github:nixos/nixpkgs/nixos-unstable";
     flake-parts.url = "github:hercules-ci/flake-parts";
     nix-compose.url = "github:xiro-codes/nix-compose";
+    flake-schemas.url = "github:DeterminateSystems/flake-schemas";
   };
 
   outputs =

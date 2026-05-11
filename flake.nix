@@ -16,11 +16,22 @@
       ...
     }:
     flake-parts.lib.mkFlake { inherit inputs; } {
-      # Use standard schemas plus custom ones for our unique outputs
-      flake.schemas = flake-schemas.schemas // {
+      # Only export schemas for the fields we actually use
+      flake.schemas = {
+        inherit (flake-schemas.schemas)
+          apps
+          packages
+          devShells
+          templates
+          nixosModules
+          formatter
+          schemas
+          checks
+          ;
+
         lib = {
           version = 1;
-          doc = "Custom library functions for Pure Nix Compose";
+          doc = "Custom library functions for Nix Compose";
           inventory = self: {
             children = builtins.mapAttrs (name: _: {
               forSystems = [ ];
@@ -28,6 +39,7 @@
             }) (import ./lib/compose.nix);
           };
         };
+
         nixosContainers = {
           version = 1;
           doc = "NixOS containers defined by nix-compose";
@@ -59,7 +71,6 @@
 
       systems = [
         "x86_64-linux"
-        "aarch64-linux"
       ];
 
       perSystem =
@@ -74,6 +85,12 @@
         {
           # Default formatter
           formatter = pkgs.nixfmt-tree;
+
+          # Flake checks for CI/Verification
+          checks = import ./tests {
+            inherit pkgs;
+            lib-compose = self.lib;
+          };
 
           # Development shell for library maintenance
           devShells.default = pkgs.mkShellNoCC {

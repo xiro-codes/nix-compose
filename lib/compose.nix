@@ -27,10 +27,9 @@ let
     { config, pkgs, ... }:
     let
       inherit (pkgs.lib) concatStringsSep mapAttrsToList;
-      activationScript = pkgs.substituteAll {
-        src = ../pkgs/dev/activation.sh;
-        devPublicKey = devKeys.public;
-      };
+      activationScript = pkgs.writeText "activation.sh" (
+        builtins.replaceStrings [ "@devPublicKey@" ] [ devKeys.public ] (builtins.readFile ../pkgs/dev/activation.sh)
+      );
     in
     {
       # Container specific settings
@@ -81,12 +80,10 @@ let
       };
       system.stateVersion = "26.05";
       # Fix permissions for the private key in the user's home
-      system.activationScripts.vmuser-ssh-keys = builtins.readFile activationScript;
+      system.activationScripts.vmuser-ssh-keys.text = builtins.readFile activationScript;
 
       # Inject cluster hosts via NixOS configuration
-      networking.extraHosts = concatStringsSep "\n" (
-        mapAttrsToList (n: ip: "${ip} ${n}") internalIps
-      );
+      networking.extraHosts = concatStringsSep "\n" (mapAttrsToList (n: ip: "${ip} ${n}") internalIps);
     };
 
   # Helper to create a package for a composition CLI
@@ -99,15 +96,26 @@ let
       inherit (pkgs) lib;
       inherit (lib) mapAttrs;
 
-      nxcScript = pkgs.substituteAll {
-        src = ../pkgs/nxc/nxc.sh;
-        connectInfoJSON = builtins.toJSON composition.connectInfo;
-        internalIpsJSON = builtins.toJSON composition.internalIps;
-        nodesJSON = builtins.toJSON (mapAttrs (n: v: "${v}") composition.nodes);
-        clusterName = composition.name;
-        nixosContainer = "${pkgs.nixos-container}/bin/nixos-container";
-        nixpkgsPath = pkgs.path;
-      };
+      nxcScript = pkgs.writeText "nxc.sh" (
+        builtins.replaceStrings
+          [
+            "@connectInfoJSON@"
+            "@internalIpsJSON@"
+            "@nodesJSON@"
+            "@clusterName@"
+            "@nixosContainer@"
+            "@nixpkgsPath@"
+          ]
+          [
+            (builtins.toJSON composition.connectInfo)
+            (builtins.toJSON composition.internalIps)
+            (builtins.toJSON (mapAttrs (n: v: "${v}") composition.nodes'))
+            composition.name
+            "${pkgs.nixos-container}/bin/nixos-container"
+            "${pkgs.path}"
+          ]
+          (builtins.readFile ../pkgs/nxc/nxc.sh)
+      );
     in
     pkgs.writeShellApplication {
       name = "nxc-${composition.name}";
@@ -231,7 +239,7 @@ let
           ...
         }:
         let
-          cfg = config.containers.compose."${name}";
+          cfg = config.nxc.compose."${name}";
           inherit (lib)
             mkEnableOption
             mkOption
@@ -262,12 +270,13 @@ let
                       name = nodeName;
                       sshPort = (lib.findFirst (n: n.name == nodeName) { } evalResult.nodesWithPorts).sshPort or 2222;
                     })
-                  ] ++ cfg.extraModules;
+                  ]
+                  ++ cfg.extraModules;
                 }).config.system.build.toplevel
               ) nodes;
         in
         {
-          options.containers.compose."${name}" = {
+          options.nxc.compose."${name}" = {
             enable = mkEnableOption "Nix-Compose cluster ${name}";
             bridgeIp = mkOption {
               type = types.str;
@@ -298,9 +307,7 @@ let
               hostBridge = bridgeName;
             }) currentNodes;
 
-            networking.extraHosts = concatStringsSep "\n" (
-              mapAttrsToList (n: ip: "${ip} ${n}") internalIps
-            );
+            networking.extraHosts = concatStringsSep "\n" (mapAttrsToList (n: ip: "${ip} ${n}") internalIps);
           };
         };
     in
@@ -315,7 +322,12 @@ let
           inherit (evalResult) nodes' connectInfo internalIps;
 
           composition = {
-            inherit name nodes' connectInfo internalIps;
+            inherit
+              name
+              nodes'
+              connectInfo
+              internalIps
+              ;
           };
 
           pkg = mkPackage { inherit pkgs composition; };
