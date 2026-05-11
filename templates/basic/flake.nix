@@ -41,7 +41,6 @@
                 {
                   services.nginx = {
                     enable = true;
-                    logError = "syslog:info"
                     virtualHosts.default = {
                       default = true;
                       locations."/".return = "200 'Hello World'";
@@ -58,6 +57,8 @@
           };
         in
         {
+          inherit (composition.flake) nixosContainers nixosModules;
+
           # Export the 'nxc' CLI app
           apps.default = nix-compose.lib.mkApp {
             inherit pkgs system;
@@ -66,9 +67,8 @@
 
           # Export individual VM packages for building
           packages = {
-            default = composition.driver;
-          }
-          // composition.nodes;
+            default = composition.nodes.srv;
+          } // composition.nodes;
 
           devShells.default = pkgs.mkShellNoCC {
             packages = [ pkgs.just ];

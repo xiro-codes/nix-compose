@@ -28,7 +28,7 @@
             }) (import ./lib/compose.nix);
           };
         };
-        nixosContainer = {
+        nixosContainers = {
           version = 1;
           doc = "NixOS containers defined by nix-compose";
           inventory = self: {
@@ -41,7 +41,7 @@
                   derivation = node;
                 }) cluster;
               }) clusters;
-            }) (self.nixosContainer or { });
+            }) (self.nixosContainers or { });
           };
         };
       };
