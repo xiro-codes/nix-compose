@@ -58,9 +58,8 @@ in
       [[ "${builtins.toString nixosEval.config.networking.bridges.br-test-cluster.interfaces}" == "" ]]
       
       echo "Checking container paths..."
-      # The container name should now be node1-<hash>
       # Extract the path via jq from a JSON-ified map of all container paths
-      CONTAINER_PATH=$(echo '${builtins.toJSON (builtins.mapAttrs (_: v: v.path) nixosEval.config.containers)}' | jq -r 'to_entries[] | select(.key | startswith("node1-")) | .value')
+      CONTAINER_PATH=$(echo '${builtins.toJSON (builtins.mapAttrs (_: v: v.path) nixosEval.config.containers)}' | jq -r '.["${eval.composition.containerNames.node1}"]')
       
       echo "Found container path: $CONTAINER_PATH"
       [[ -n "$CONTAINER_PATH" ]]
@@ -122,15 +121,11 @@ in
       eval = c.perSystem pkgs;
     in
     pkgs.runCommand "test-ordering" { buildInputs = [ pkgs.jq ]; } ''
-      echo "Checking if node2 comes before node1 in the package's nxc script..."
-      # Find the actual Python script path from the shell wrapper
-      PY_SCRIPT=$(grep -o '/nix/store/[^ ]*-nxc.py' ${eval.packages.ordered-cluster}/bin/nxc-ordered-cluster)
-      SCRIPT_CONTENT=$(cat "$PY_SCRIPT")
+      echo "Checking if node2 comes before node1 in the package's nxc script config..."
+      # Find the config.json path from the shell wrapper
+      CONFIG_FILE=$(grep -o 'NXC_CONFIG="[^"]*"' ${eval.packages.ordered-cluster}/bin/nxc-ordered-cluster | cut -d'"' -f2)
       
-      # Extract ORDERED_NODES from the script
-      # In Python it looks like: ORDERED_NODES = json.loads('["node2", "node1"]')
-      ORDERED_NODES_JSON=$(echo "$SCRIPT_CONTENT" | grep "ORDERED_NODES =" | cut -d"'" -f2)
-      FIRST_NODE=$(echo "$ORDERED_NODES_JSON" | jq -r '.[0]')
+      FIRST_NODE=$(jq -r '.orderedNodes[0]' "$CONFIG_FILE")
       
       if [[ "$FIRST_NODE" != "node2" ]]; then
         echo "Error: Expected node2 first, found $FIRST_NODE"
@@ -171,8 +166,8 @@ in
       # Extract attributes to find hashed names
       NODES_JSON='${builtins.toJSON (builtins.mapAttrs (n: v: v.autoStart) nixosEval.config.containers)}'
       
-      NODE1_VAL=$(echo "$NODES_JSON" | jq -r 'to_entries[] | select(.key | startswith("node1-")) | .value')
-      NODE2_VAL=$(echo "$NODES_JSON" | jq -r 'to_entries[] | select(.key | startswith("node2-")) | .value')
+      NODE1_VAL=$(echo "$NODES_JSON" | jq -r '.["${(c.perSystem pkgs).composition.containerNames.node1}"]')
+      NODE2_VAL=$(echo "$NODES_JSON" | jq -r '.["${(c.perSystem pkgs).composition.containerNames.node2}"]')
       
       echo "node1 autoStart: $NODE1_VAL"
       echo "node2 autoStart: $NODE2_VAL"
@@ -210,12 +205,9 @@ in
       echo "Checking bridge IP in NixOS configuration..."
       [[ "${nixosEval.config.nxc.compose.subnet-cluster.bridgeIp}" == "10.250.0.254" ]]
       
-      echo "Checking bridge IP in CLI script..."
-      PY_SCRIPT=$(grep -o '/nix/store/[^ ]*-nxc.py' ${eval.packages.subnet-cluster}/bin/nxc-subnet-cluster)
-      SCRIPT_CONTENT=$(cat "$PY_SCRIPT")
-      
-      # In Python: BRIDGE_IP = "10.250.0.254"
-      SCRIPT_BRIDGE_IP=$(echo "$SCRIPT_CONTENT" | grep "BRIDGE_IP =" | cut -d"\"" -f2)
+      echo "Checking bridge IP in CLI config..."
+      CONFIG_FILE=$(grep -o 'NXC_CONFIG="[^"]*"' ${eval.packages.subnet-cluster}/bin/nxc-subnet-cluster | cut -d'"' -f2)
+      SCRIPT_BRIDGE_IP=$(jq -r '.bridgeIp' "$CONFIG_FILE")
       if [[ "$SCRIPT_BRIDGE_IP" != "10.250.0.254" ]]; then
         echo "Error: Expected 10.250.0.254, found $SCRIPT_BRIDGE_IP"
         exit 1

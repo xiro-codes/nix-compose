@@ -5,23 +5,37 @@ import subprocess
 import shutil
 import argparse
 
-# Configuration injected by Nix
-CONNECT_INFO = json.loads('@connectInfoJSON@')
-INTERNAL_IPS = json.loads('@internalIpsJSON@')
-NODES = json.loads('@nodesJSON@')
-ORDERED_NODES = json.loads('@orderedNodesJSON@')
-CONTAINER_NAMES = json.loads('@containerNamesJSON@')
-CLUSTER_NAME = "@clusterName@"
-CLUSTER_HASH = "@clusterHash@"
-BRIDGE_IP = "@bridgeIp@"
-NIXOS_CONTAINER = "@nixosContainer@"
-NIXPKGS_PATH = "@nixpkgsPath@"
+import os
+
+config_path = os.environ.get('NXC_CONFIG')
+if not config_path:
+    print("Error: NXC_CONFIG environment variable not set.", file=sys.stderr)
+    sys.exit(1)
+
+with open(config_path, 'r') as f:
+    config = json.load(f)
+
+CONNECT_INFO = config.get('connectInfo', {})
+INTERNAL_IPS = config.get('internalIps', {})
+NODES = config.get('nodes', {})
+ORDERED_NODES = config.get('orderedNodes', [])
+CONTAINER_NAMES = config.get('containerNames', {})
+CLUSTER_NAME = config.get('clusterName', '')
+CLUSTER_HASH = config.get('clusterHash', '')
+BRIDGE_IP = config.get('bridgeIp', '')
+NIXOS_CONTAINER = config.get('nixosContainer', '')
+NIXPKGS_PATH = config.get('nixpkgsPath', '')
+
+def require_root():
+    if os.geteuid() != 0:
+        print("Error: This command requires root privileges. Please run 'nxc' with sudo.", file=sys.stderr)
+        sys.exit(1)
+
 
 def run(cmd, capture_output=False, check=True):
-    """Helper to run shell commands with sudo if needed."""
-    full_cmd = ["sudo"] + cmd
+    """Helper to run shell commands."""
     result = subprocess.run(
-        full_cmd, 
+        cmd, 
         capture_output=capture_output, 
         text=True, 
         check=False
@@ -48,6 +62,7 @@ def check_ip_conflicts(bridge_name):
         pass
 
 def cmd_up():
+    require_root()
     bridge_name = f"br-{CLUSTER_NAME[:12]}"
     print(f"Ensuring bridge {bridge_name} for cluster: {CLUSTER_NAME}")
     
@@ -103,6 +118,7 @@ def cmd_up():
     print("Cluster is up. Use 'nxc status' to monitor.")
 
 def cmd_down():
+    require_root()
     print("Stopping and destroying NixOS containers...")
     for node in reversed(ORDERED_NODES):
         container_name = CONTAINER_NAMES[node]
@@ -128,6 +144,7 @@ def cmd_status():
         print(f"{node:<12} {container_name:<20} {ip:<15} {status:<10}")
 
 def cmd_ssh(node, command_args=None):
+    require_root()
     if node not in CONTAINER_NAMES:
         print(f"Error: Unknown node {node}")
         sys.exit(1)
@@ -144,15 +161,16 @@ def cmd_ssh(node, command_args=None):
         run([NIXOS_CONTAINER, "run", container_name, "--"] + full_cmd)
     else:
         print(f"Connecting to {node} via machinectl shell...")
-        subprocess.run(["sudo", "machinectl", "shell", f"vmuser@{container_name}"])
+        subprocess.run(["machinectl", "shell", f"vmuser@{container_name}"])
 
 def cmd_logs(node):
+    require_root()
     if node not in CONTAINER_NAMES:
         print(f"Error: Unknown node {node}")
         sys.exit(1)
     container_name = CONTAINER_NAMES[node]
     print(f"Showing live logs for {node} ({container_name})...")
-    subprocess.run(["sudo", NIXOS_CONTAINER, "run", container_name, "--", "journalctl", "-f"])
+    subprocess.run([NIXOS_CONTAINER, "run", container_name, "--", "journalctl", "-f"])
 
 def cmd_ip(node):
     ip = INTERNAL_IPS.get(node)

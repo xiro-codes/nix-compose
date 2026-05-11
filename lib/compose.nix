@@ -1,21 +1,4 @@
 let
-  # Hardcoded development keys for internal node-to-node and host-to-node access.
-  # These are safe for local development environments.
-  devKeys = {
-    public = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOm6fV7fV9uX1f5fV7fV9uX1f5fV7fV9uX1f5fV7fV9u dev-key";
-    # A placeholder private key - in a real "pure" nix setup we often provide a fixed dev key
-    # or let the user provide one. For this emulation, we use a standard one.
-    private = ''
-      -----BEGIN OPENSSH PRIVATE KEY-----
-      b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-      ZDI1NTE5AAAAIOm6fV7fV9uX1f5fV7fV9uX1f5fV7fV9uX1f5fV7fV9uAAAAsP6X7Vf6X7
-      VfAAAAAtzc2gtZWZDI1NTE5AAAAIOm6fV7fV9uX1f5fV7fV9uX1f5fV7fV9uX1f5fV7fV
-      9uAAAAYQC6fV7fV9uX1f5fV7fV9uX1f5fV7fV9uX1f5fV7fV9uX1f5fV7fV9uX1f5fV7fV
-      9uX1f5fV7fV9uX1f5fV7fV9uX1f5fV7fV9uAAAAAAtZGV2LWtleQECAwQFBgc=
-      -----END OPENSSH PRIVATE KEY-----
-    '';
-  };
-
   # Internal helper to inject dev configuration into nodes
   mkDevModule =
     {
@@ -28,11 +11,6 @@ let
     { config, pkgs, ... }:
     let
       inherit (pkgs.lib) concatStringsSep mapAttrsToList;
-      activationScript = pkgs.writeText "activation.sh" (
-        builtins.replaceStrings [ "@devPublicKey@" ] [ devKeys.public ] (
-          builtins.readFile ../pkgs/dev/activation.sh
-        )
-      );
     in
     {
       # Container specific settings
@@ -50,13 +28,12 @@ let
       ];
       networking.defaultGateway = bridgeIp;
 
-      # Allow all traffic on the internal interface for ease of use in the cluster
-      networking.firewall.trustedInterfaces = [ "eth0" ];
+      # Allow SSH traffic explicitly instead of trusting the entire interface
+      networking.firewall.allowedTCPPorts = [ 22 ];
       networking.firewall.checkReversePath = false;
 
       # Enable SSH for remote access (optional but nice)
       services.openssh.enable = true;
-      services.openssh.settings.PermitRootLogin = "yes";
 
       # Create a default vmuser
       environment.systemPackages = [ pkgs.htop ];
@@ -64,7 +41,6 @@ let
         isNormalUser = true;
         extraGroups = [ "wheel" ];
         initialPassword = ""; # No password for ease of use
-        openssh.authorizedKeys.keys = [ devKeys.public ];
       };
       services.nginx = {
         commonHttpConfig = ''
@@ -72,18 +48,7 @@ let
           access_log syslog:server=unix:/dev/log combined;
         '';
       };
-      # Allow passwordless sudo for vmuser
-      security.sudo.wheelNeedsPassword = false;
-
-      # Inject the private key so nodes can SSH into each other
-      environment.etc."ssh/id_ed25519" = {
-        text = devKeys.private;
-        mode = "0600";
-        user = "vmuser";
-      };
       system.stateVersion = "26.05";
-      # Fix permissions for the private key in the user's home
-      system.activationScripts.vmuser-ssh-keys.text = builtins.readFile activationScript;
 
       # Inject cluster hosts via NixOS configuration
       networking.extraHosts = concatStringsSep "\n" (mapAttrsToList (n: ip: "${ip} ${n}") internalIps);
@@ -105,35 +70,18 @@ let
       orderedNodes = sort (a: b:
         (evalData.nodeConfig.${a}.order or 1000) < (evalData.nodeConfig.${b}.order or 1000)
       ) (attrNames evalData.nodes');
-
-      nxcScript = pkgs.writeText "nxc.py" (
-        builtins.replaceStrings
-          [
-            "@connectInfoJSON@"
-            "@internalIpsJSON@"
-            "@nodesJSON@"
-            "@orderedNodesJSON@"
-            "@containerNamesJSON@"
-            "@clusterName@"
-            "@clusterHash@"
-            "@bridgeIp@"
-            "@nixosContainer@"
-            "@nixpkgsPath@"
-          ]
-          [
-            (builtins.toJSON evalData.connectInfo)
-            (builtins.toJSON evalData.internalIps)
-            (builtins.toJSON (mapAttrs (n: v: "${v}") evalData.nodes'))
-            (builtins.toJSON orderedNodes)
-            (builtins.toJSON evalData.containerNames)
-            evalData.name
-            evalData.clusterHash
-            evalData.bridgeIp
-            "${pkgs.nixos-container}/bin/nixos-container"
-            "${pkgs.path}"
-          ]
-          (builtins.readFile ../pkgs/nxc/nxc.py)
-      );
+      nxcConfig = pkgs.writeText "config.json" (builtins.toJSON {
+        connectInfo = evalData.connectInfo;
+        internalIps = evalData.internalIps;
+        nodes = mapAttrs (n: v: "${v}") evalData.nodes';
+        orderedNodes = orderedNodes;
+        containerNames = evalData.containerNames;
+        clusterName = evalData.name;
+        clusterHash = evalData.clusterHash;
+        bridgeIp = evalData.bridgeIp;
+        nixosContainer = "${pkgs.nixos-container}/bin/nixos-container";
+        nixpkgsPath = "${pkgs.path}";
+      });
     in
     pkgs.writeShellApplication {
       name = "nxc-${evalData.name}";
@@ -146,7 +94,10 @@ let
         pkgs.procps
         pkgs.iptables
       ];
-      text = "${pkgs.python3}/bin/python3 ${nxcScript} \"$@\"";
+      text = ''
+        export NXC_CONFIG="${nxcConfig}"
+        ${pkgs.python3}/bin/python3 ${../pkgs/nxc/nxc.py} "$@"
+      '';
     };
 
   # Helper to create a unified CLI app for a composition
@@ -198,13 +149,14 @@ let
             findFirst
             ;
 
-          # Generate unique container names (max 12 chars: shortNodeName(7) + '-' + hash(4))
+          # Generate unique container names (max 11 chars due to veth limit)
+          # Format: nc-HASH(8)
           containerNames = mapAttrs (
             nodeName: _:
             let
-              shortName = builtins.substring 0 7 nodeName;
+              hash = builtins.substring 0 8 (builtins.hashString "sha256" "${nodeName}-${clusterHash}");
             in
-            "${shortName}-${clusterHash}"
+            "nc-${hash}"
           ) nodes;
 
           # Assign an SSH port to each node starting from 2222
