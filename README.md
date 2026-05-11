@@ -4,9 +4,6 @@ A lightweight, multi-node NixOS container orchestration library implemented in p
 
 Now powered by a **Python-based orchestrator** for improved reliability and advanced features.
 
-> [!CAUTION]
-> **Use at your own risk.** This library is currently in an experimental state. It uses `systemd-nspawn` and `nixos-container` which require root privileges (`sudo`).
-
 ## Features
 
 - **Pure Nix**: No external binaries or heavy dependencies required—just Nix.
