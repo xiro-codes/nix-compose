@@ -99,9 +99,11 @@ let
       inherit (pkgs) lib;
       inherit (lib) mapAttrs attrNames sort;
 
+      evalResult = composition.perSystem pkgs;
+
       orderedNodes = sort (a: b:
         (composition.nodeConfig.${a}.order or 1000) < (composition.nodeConfig.${b}.order or 1000)
-      ) (attrNames composition.nodes');
+      ) (attrNames evalResult.composition.nodes');
 
       nxcScript = pkgs.writeText "nxc.py" (
         builtins.replaceStrings
@@ -118,14 +120,14 @@ let
             "@nixpkgsPath@"
           ]
           [
-            (builtins.toJSON composition.connectInfo)
-            (builtins.toJSON composition.internalIps)
-            (builtins.toJSON (mapAttrs (n: v: "${v}") composition.nodes'))
+            (builtins.toJSON evalResult.composition.connectInfo)
+            (builtins.toJSON evalResult.composition.internalIps)
+            (builtins.toJSON (mapAttrs (n: v: "${v}") evalResult.composition.nodes'))
             (builtins.toJSON orderedNodes)
-            (builtins.toJSON composition.containerNames)
-            composition.name
-            composition.clusterHash
-            composition.bridgeIp
+            (builtins.toJSON evalResult.composition.containerNames)
+            evalResult.composition.name
+            evalResult.composition.clusterHash
+            evalResult.composition.bridgeIp
             "${pkgs.nixos-container}/bin/nixos-container"
             "${pkgs.path}"
           ]
