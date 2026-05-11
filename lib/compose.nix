@@ -104,7 +104,9 @@ let
             "@connectInfoJSON@"
             "@internalIpsJSON@"
             "@nodesJSON@"
+            "@containerNamesJSON@"
             "@clusterName@"
+            "@clusterHash@"
             "@nixosContainer@"
             "@nixpkgsPath@"
           ]
@@ -112,7 +114,9 @@ let
             (builtins.toJSON composition.connectInfo)
             (builtins.toJSON composition.internalIps)
             (builtins.toJSON (mapAttrs (n: v: "${v}") composition.nodes'))
+            (builtins.toJSON composition.containerNames)
             composition.name
+            composition.clusterHash
             "${pkgs.nixos-container}/bin/nixos-container"
             "${pkgs.path}"
           ]
@@ -157,6 +161,8 @@ let
       # Helpers used during evaluation
       nixosSystem = pkgs: import (pkgs.path + "/nixos/lib/eval-config.nix");
 
+      clusterHash = builtins.substring 0 4 (builtins.hashString "sha256" name);
+
       bridgeName = "br-${builtins.substring 0 12 name}";
 
       # Internal helper to evaluate nodes for a specific pkgs
@@ -174,17 +180,13 @@ let
             findFirst
             ;
 
-          # Enforce name limits for nixos-container (interface names are limited to 15 chars, so 've-' + name <= 15)
-          maxLen = 12;
-          validateNames = mapAttrs (
+          # Generate unique container names (max 12 chars: shortNodeName(7) + '-' + hash(4))
+          containerNames = mapAttrs (
             nodeName: _:
             let
-              fullPath = "${name}-${nodeName}";
+              shortName = builtins.substring 0 7 nodeName;
             in
-            if stringLength fullPath > maxLen then
-              throw "Container name '${fullPath}' is too long (${toString (stringLength fullPath)} chars). NixOS container names (including the composition name) must be <= ${toString maxLen} characters to satisfy network interface limits."
-            else
-              null
+            "${shortName}-${clusterHash}"
           ) nodes;
 
           # Assign an SSH port to each node starting from 2222
@@ -200,11 +202,7 @@ let
 
           # Evaluate each node as a proper NixOS system
           evaluatedNodes = mapAttrs (
-            nodeName: nodeConf:
-            let
-              _ = validateNames.${nodeName};
-            in
-            (nixosSystem pkgs) {
+            nodeName: nodeConf: (nixosSystem pkgs) {
               inherit (pkgs) system;
               modules = [
                 nodeConf
@@ -229,6 +227,7 @@ let
             connectInfo
             internalIps
             nodesWithPorts
+            containerNames
             ;
         };
 
@@ -250,11 +249,16 @@ let
             mapAttrs
             mapAttrsToList
             concatStringsSep
+            listToAttrs
             ;
 
           # Evaluate nodes lazily based on host pkgs
           evalResult = evaluate pkgs;
-          inherit (evalResult) internalIps nodes';
+          inherit (evalResult)
+            internalIps
+            nodes'
+            containerNames
+            ;
 
           # If extraModules are provided, we must re-evaluate the nodes.
           currentNodes =
@@ -302,14 +306,21 @@ let
             ];
             networking.firewall.trustedInterfaces = [ bridgeName ];
 
-            containers = mapAttrs (nodeName: toplevel: {
-              path = toplevel;
-              autoStart = true;
-              privateNetwork = true;
-              hostBridge = bridgeName;
-            }) currentNodes;
+            containers = listToAttrs (
+              mapAttrsToList (nodeName: toplevel: {
+                name = containerNames.${nodeName};
+                value = {
+                  path = toplevel;
+                  autoStart = true;
+                  privateNetwork = true;
+                  hostBridge = bridgeName;
+                };
+              }) currentNodes
+            );
 
-            networking.extraHosts = concatStringsSep "\n" (mapAttrsToList (n: ip: "${ip} ${n}") internalIps);
+            networking.extraHosts = concatStringsSep "\n" (
+              mapAttrsToList (n: ip: "${ip} ${n} ${n}.${name} ${containerNames.${n}}") internalIps
+            );
           };
         };
     in
@@ -321,7 +332,12 @@ let
         pkgs:
         let
           evalResult = evaluate pkgs;
-          inherit (evalResult) nodes' connectInfo internalIps;
+          inherit (evalResult)
+            nodes'
+            connectInfo
+            internalIps
+            containerNames
+            ;
 
           composition = {
             inherit
@@ -329,6 +345,8 @@ let
               nodes'
               connectInfo
               internalIps
+              containerNames
+              clusterHash
               ;
           };
 

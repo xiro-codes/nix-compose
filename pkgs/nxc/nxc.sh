@@ -4,7 +4,9 @@ COMMAND="${1:-help}"
 CONNECT_INFO='@connectInfoJSON@'
 INTERNAL_IPS='@internalIpsJSON@'
 NODES='@nodesJSON@'
+CONTAINER_NAMES='@containerNamesJSON@'
 CLUSTER_NAME="@clusterName@"
+CLUSTER_HASH="@clusterHash@"
 NIXOS_CONTAINER="@nixosContainer@"
 
 # Ensure nixos-container can find nixpkgs/nixos during creation/update
@@ -20,9 +22,18 @@ case "$COMMAND" in
     sudo iptables -I INPUT -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
     sudo iptables -I FORWARD -i "$BRIDGE_NAME" -j ACCEPT 2>/dev/null || true
 
-    echo "Starting NixOS containers for cluster: $CLUSTER_NAME"
+    echo "Cleaning up orphaned containers for cluster hash: $CLUSTER_HASH"
+    sudo "$NIXOS_CONTAINER" list < /dev/null | grep "\-$CLUSTER_HASH$" | while read -r C; do
+      if ! echo "$CONTAINER_NAMES" | jq -e ".[] | select(. == \"$C\")" >/dev/null; then
+        echo "  - Destroying orphaned container: $C"
+        sudo "$NIXOS_CONTAINER" stop "$C" < /dev/null || true
+        sudo "$NIXOS_CONTAINER" destroy "$C" < /dev/null || true
+      fi
+    done
+
+    echo "Starting NixOS containers for cluster: $CLUSTER_NAME ($CLUSTER_HASH)"
     echo "$NODES" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE TOPLEVEL; do
-      CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+      CONTAINER_NAME=$(echo "$CONTAINER_NAMES" | jq -r ".\"$NODE\"")
       IP=$(echo "$INTERNAL_IPS" | jq -r ".\"$NODE\"")
       
       if sudo "$NIXOS_CONTAINER" list < /dev/null | grep -q "^$CONTAINER_NAME$"; then
@@ -48,8 +59,7 @@ case "$COMMAND" in
     ;;
   down)
     echo "Stopping and destroying NixOS containers..."
-    echo "$NODES" | jq -r 'keys[]' | while read -r NODE; do
-      CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+    echo "$CONTAINER_NAMES" | jq -r '.[]' | while read -r CONTAINER_NAME; do
       echo "  - Stopping $CONTAINER_NAME..."
       sudo "$NIXOS_CONTAINER" stop "$CONTAINER_NAME" < /dev/null || true
       sudo "$NIXOS_CONTAINER" destroy "$CONTAINER_NAME" < /dev/null || true
@@ -67,7 +77,12 @@ case "$COMMAND" in
       exit 1
     fi
     shift
-    CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+    CONTAINER_NAME=$(echo "$CONTAINER_NAMES" | jq -r ".\"$NODE\" // empty")
+    
+    if [ -z "$CONTAINER_NAME" ]; then
+      echo "Error: Unknown node $NODE"
+      exit 1
+    fi
     
     if ! sudo "$NIXOS_CONTAINER" list < /dev/null | grep -q "^$CONTAINER_NAME$"; then
       echo "Error: Container $CONTAINER_NAME is not running."
@@ -110,7 +125,11 @@ case "$COMMAND" in
       echo "Usage: nxc logs <node-name>"
       exit 1
     fi
-    CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+    CONTAINER_NAME=$(echo "$CONTAINER_NAMES" | jq -r ".\"$NODE\" // empty")
+    if [ -z "$CONTAINER_NAME" ]; then
+      echo "Error: Unknown node $NODE"
+      exit 1
+    fi
     echo "Showing live logs for $NODE ($CONTAINER_NAME)..."
     sudo "$NIXOS_CONTAINER" run "$CONTAINER_NAME" -- journalctl -f
     ;;
@@ -119,7 +138,7 @@ case "$COMMAND" in
     printf "%-12s %-20s %-15s %-10s\n" "NODE" "CONTAINER" "IP" "STATUS"
     echo "------------------------------------------------------------------------"
     echo "$INTERNAL_IPS" | jq -r 'to_entries[] | "\(.key) \(.value)"' | while read -r NODE IP; do
-      CONTAINER_NAME="$CLUSTER_NAME-$NODE"
+      CONTAINER_NAME=$(echo "$CONTAINER_NAMES" | jq -r ".\"$NODE\"")
       # We use a subshell to avoid sudo prompts hanging if possible, though status is usually fine
       STATUS=$(sudo "$NIXOS_CONTAINER" status "$CONTAINER_NAME" 2>/dev/null || echo "down")
       printf "%-12s %-20s %-15s %-10s\n" "$NODE" "$CONTAINER_NAME" "$IP" "$STATUS"
