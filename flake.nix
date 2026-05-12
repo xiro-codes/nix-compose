@@ -67,6 +67,10 @@
           path = ./templates/basic;
           description = "A basic multi-node NixOS cluster using Pure Nix Compose";
         };
+        designed = {
+          path = ./templates/designed;
+          description = "The more intended usage";
+        };
       };
 
       systems = [
