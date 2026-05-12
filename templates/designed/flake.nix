@@ -27,7 +27,7 @@
       systems = [
         "x86_64-linux"
       ];
-      flake.nixosModules.default = import ./nix/module.nix { inherit self; };
+      flake = composition.flake;
       perSystem =
         {
           pkgs,

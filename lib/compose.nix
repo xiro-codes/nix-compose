@@ -79,6 +79,7 @@ let
         clusterName = evalData.name;
         clusterHash = evalData.clusterHash;
         bridgeIp = evalData.bridgeIp;
+        bridgeName = evalData.bridgeName;
         nixosContainer = "${pkgs.nixos-container}/bin/nixos-container";
         nixpkgsPath = "${pkgs.path}";
       });
@@ -132,7 +133,7 @@ let
 
       clusterHash = builtins.substring 0 4 (builtins.hashString "sha256" name);
 
-      bridgeName = "br-${builtins.substring 0 12 name}";
+      bridgeName = "br-${builtins.substring 0 7 name}-${clusterHash}";
 
       # Internal helper to evaluate nodes for a specific pkgs
       evaluate =
@@ -317,6 +318,7 @@ let
               clusterHash
               nodeConfig
               bridgeIp
+              bridgeName
               ;
           };
 
@@ -330,7 +332,12 @@ let
         };
 
       topLevelComposition = {
-        inherit name nodes;
+        inherit
+          name
+          nodes
+          bridgeName
+          clusterHash
+          ;
         nixosModule = nixosModule';
         perSystem = perSystem';
         flake = {

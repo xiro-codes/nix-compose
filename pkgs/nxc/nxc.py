@@ -23,6 +23,7 @@ CONTAINER_NAMES = config.get('containerNames', {})
 CLUSTER_NAME = config.get('clusterName', '')
 CLUSTER_HASH = config.get('clusterHash', '')
 BRIDGE_IP = config.get('bridgeIp', '')
+BRIDGE_NAME = config.get('bridgeName', f"br-{CLUSTER_NAME[:12]}")
 NIXOS_CONTAINER = config.get('nixosContainer', '')
 NIXPKGS_PATH = config.get('nixpkgsPath', '')
 
@@ -63,7 +64,7 @@ def check_ip_conflicts(bridge_name):
 
 def cmd_up():
     require_root()
-    bridge_name = f"br-{CLUSTER_NAME[:12]}"
+    bridge_name = BRIDGE_NAME
     print(f"Ensuring bridge {bridge_name} for cluster: {CLUSTER_NAME}")
     
     check_ip_conflicts(bridge_name)
@@ -126,7 +127,7 @@ def cmd_down():
         run([NIXOS_CONTAINER, "stop", container_name], check=False)
         run([NIXOS_CONTAINER, "destroy", container_name], check=False)
     
-    bridge_name = f"br-{CLUSTER_NAME[:12]}"
+    bridge_name = BRIDGE_NAME
     print(f"Removing bridge {bridge_name}...")
     run(["iptables", "-D", "INPUT", "-i", bridge_name, "-j", "ACCEPT"], check=False)
     run(["iptables", "-D", "FORWARD", "-i", bridge_name, "-j", "ACCEPT"], check=False)

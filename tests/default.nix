@@ -55,7 +55,7 @@ in
     in
     pkgs.runCommand "test-module" { buildInputs = [ pkgs.jq ]; } ''
       echo "Checking bridge configuration..."
-      [[ "${builtins.toString nixosEval.config.networking.bridges.br-test-cluster.interfaces}" == "" ]]
+      [[ "${builtins.toString nixosEval.config.networking.bridges.${testCompose.bridgeName}.interfaces}" == "" ]]
       
       echo "Checking container paths..."
       # Extract the path via jq from a JSON-ified map of all container paths
