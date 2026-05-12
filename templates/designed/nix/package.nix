@@ -27,7 +27,7 @@ rustPlatform.buildRustPackage {
   OPENSSL_NO_VENDOR = 1;
 
   postInstall = ''
-    mkdir -p $out/share/$name
+    mkdir -p $out/share/${name}
     cp -r templates $out/share/${name}
     cp -r static $out/share/${name}
   '';

@@ -1,4 +1,7 @@
-{ self }:
+{
+  name ? "app",
+  self,
+}:
 {
   config,
   lib,
@@ -9,12 +12,12 @@
 with lib;
 
 let
-  cfg = config.services.app;
+  cfg = config.services.${name};
   pkg = self.packages.${pkgs.system}.default;
 in
 {
-  options.services.app = {
-    enable = mkEnableOption "Web Service";
+  options.services.${name} = {
+    enable = mkEnableOption "${name} Service";
 
     package = mkOption {
       type = types.package;
@@ -36,7 +39,7 @@ in
 
     workingDirectory = mkOption {
       type = types.str;
-      default = "${cfg.package}/share/rocket-blog";
+      default = "${cfg.package}/share/${name}";
       description = "Working directory for the services. Override this for development to point to local templates/static.";
     };
 
@@ -55,14 +58,14 @@ in
   };
 
   config = mkIf cfg.enable {
-    systemd.services.rocket-forge = {
-      description = "Rocket Forge Unified Service";
+    systemd.services.${name}= {
+      description = "${name} Service";
       wantedBy = [ "multi-user.target" ];
       after = [
         "network.target"
       ];
       environment = {
-        ROCKET_PROFILE = cfg.rocketProfile;
+        # ROCKET_PROFILE = cfg.rocketProfile;
         ROCKET_PORT = toString cfg.port;
         ROCKET_ADDRESS = "0.0.0.0";
         ROCKET_DATABASES__SEA_ORM__URL = cfg.databaseUrl;

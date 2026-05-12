@@ -17,22 +17,28 @@
       nix-compose,
       ...
     }:
+    let
+      composition = import ./nix/composition.nix {
+        inherit self;
+        inherit (inputs) nix-compose;
+      };
+    in
     flake-parts.lib.mkFlake { inherit inputs; } {
       systems = [
         "x86_64-linux"
       ];
-
+      flake.nixosModules.default = import ./nix/module.nix { inherit self; };
       perSystem =
         {
           pkgs,
-system,
+          system,
           ...
         }:
         let
           # Evaluate the composition for the current system
           pkgs = import nixpkgs {
             inherit system;
-            overlays = [ (import inputs.rust-overlay)];
+            overlays = [ (import inputs.rust-overlay) ];
           };
           rustToolchain = pkgs.rust-bin.stable.latest.default.override {
             extensions = [
@@ -44,29 +50,31 @@ system,
             cargo = rustToolchain;
             rustc = rustToolchain;
           };
-          app = pkgs.callPackage ((import ./nix/package.nix) {name = "app"; }) {
+          app = pkgs.callPackage ((import ./nix/package.nix) { name = "app"; }) {
             inherit rustPlatform;
           };
-          composition = import ./nix/composition.nix {
-            inherit pkgs self;
-            inherit (inputs) nix-compose;
-          };
-        in {
-          packages = {
-            default = app.overrideAttrs ( old: {
-              buildType = "debug";
-            });
-            app = app.overrideAttrs (old: {
-              buildType = "debug";
-            });
-            app-release = app;
-          };
-          apps.default = inputs.nix-compose.lib.mkApp {
-            inherit pkgs composition;
-          };
+          comp = composition.perSystem pkgs;
+        in
+        {
+          apps.default = comp.apps."${composition.name}";
+          packages =
+            comp.packages
+            // comp.nodes' # maybe i shouldnt outputs these as packages
+            // {
+              default = app.overrideAttrs (old: {
+                buildType = "debug";
+              });
+              app = app.overrideAttrs (old: {
+                buildType = "debug";
+              });
+              app-release = app;
+            };
           formatter = pkgs.nixfmt-tree;
           devShells.default = pkgs.mkShell {
-            nativeBuildInputs = [ rustToolchain pkgs.pkg-config];
+            nativeBuildInputs = [
+              rustToolchain
+              pkgs.pkg-config
+            ];
             buildInputs = [
               pkgs.openssl
             ];
@@ -81,6 +89,5 @@ system,
           };
         };
 
-      flake = nix-compose.schemas // cluster.flake
     };
 }

@@ -1,48 +1,31 @@
 {
+  name ? "app",
   self,
   nix-compose,
 }:
 
 nix-compose.lib.mkCompose {
-  name = "forge";
+  name = "${name}";
   subnet = "1.233.2";
   nodes = {
     app =
       { ... }:
       {
         imports = [ self.nixosModules.default ];
-        services.rocket-forge = {
+        services."${name}" = {
           enable = true;
-          databaseUrl = "postgres://rocket_blog:rocket_blog@db/rocket_blog";
-          redisUrl = "redis://redis/";
-          secretKeyFile = ../.rocket_secret_key;
+          databaseUrl = "postgres://${name}:${name}@db/${name}";
         };
-        networking.firewall.allowedTCPPorts = [ 80 ];
+        networking.firewall.allowedTCPPorts = [ 80 8000 ];
       };
     db =
       { ... }:
       {
         imports = [ self.nixosModules.default ];
-        services.rocket-forge = {
-          enable = false;
-          manageDatabase = true;
-        };
-      };
-    redis =
-      { ... }:
-      {
-        imports = [ self.nixosModules.default ];
-        services.rocket-forge = {
-          enable = false;
-          manageRedis = true;
-        };
       };
   };
   nodeConfig = {
     db = {
-      order = 10;
-    };
-    redis = {
       order = 10;
     };
     app = {
